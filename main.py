@@ -1547,14 +1547,18 @@ async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component: return
     custom_id = interaction.data.get("custom_id", "")
+    # Defer immediately to avoid Unknown Interaction (3s timeout)
+    try:
+        await interaction.response.defer()
+    except Exception:
+        pass  # Already deferred or expired
 
     # ── Delete Pet ────────────────────────────────────────────────────────────
 
     if custom_id.startswith("delpet_yes:"):
         name = custom_id[len("delpet_yes:"):]
         info = getattr(bot, "_delpet_pending", {}).pop(name, None)
-        if not info: await interaction.response.send_message("Session Expired.", ephemeral=True); return
-        await interaction.response.defer()
+        if not info: await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run The Command Again."))]); return
         data = info["data"]; sha = info["sha"]; deleted_url = info["url"]
         del data[name]
         try:
@@ -1569,7 +1573,6 @@ async def on_interaction(interaction: discord.Interaction):
 
     elif custom_id == "delpet_no":
         getattr(bot, "_delpet_pending", {})
-        await interaction.response.defer()
         await patch_msg(interaction, [container(txt("## Delete Cancelled"), sep(), txt("No Changes Were Made."))])
 
     # ── Fetchpet Overwrite ────────────────────────────────────────────────────
@@ -1577,8 +1580,7 @@ async def on_interaction(interaction: discord.Interaction):
     elif custom_id.startswith("overwrite_yes:"):
         pet_name = custom_id[len("overwrite_yes:"):]
         info     = getattr(bot, "_fetchpet_pending", {}).pop(pet_name, None)
-        if not info: await interaction.response.send_message("Session Expired.", ephemeral=True); return
-        await interaction.response.defer()
+        if not info: await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run The Command Again."))]); return
         railway_url = info["railway_url"]; data = info["data"]; sha = info["sha"]; old_url = data.get(pet_name, "")
         try:
             data[pet_name] = railway_url
@@ -1596,7 +1598,6 @@ async def on_interaction(interaction: discord.Interaction):
         pet_name = custom_id[len("overwrite_no:"):]
         info     = getattr(bot, "_fetchpet_pending", {}).pop(pet_name, None)
         exist    = info["data"].get(pet_name, "") if info else ""
-        await interaction.response.defer()
         await patch_msg(interaction, [container(
             txt("## Overwrite Cancelled"), sep(),
             section(f"**{pet_name}**\n\n**Kept Existing URL:**\n```\n{shorten(exist)}\n```", exist) if exist else txt(f"**{pet_name}**  Kept Existing Entry."),
@@ -1607,7 +1608,6 @@ async def on_interaction(interaction: discord.Interaction):
     elif custom_id == "syncpets_yes":
         pending = getattr(bot, "_syncpets_pending", {}).pop("latest", None)
         if not pending: await interaction.response.send_message("Session Expired.", ephemeral=True); return
-        await interaction.response.defer()
         data       = pending["data"]; sha = pending["sha"]
         to_convert = pending["to_convert"]; to_refetch = pending["to_refetch"]
         total      = len(to_convert) + len(to_refetch); done = 0
@@ -1643,14 +1643,12 @@ async def on_interaction(interaction: discord.Interaction):
 
     elif custom_id == "syncpets_no":
         getattr(bot, "_syncpets_pending", {}).pop("latest", None)
-        await interaction.response.defer()
         await patch_msg(interaction, [container(txt("## Sync Cancelled"), sep(), txt("No Changes Were Made To GitHub."))])
 
     # ── Clear Emojis GitHub ───────────────────────────────────────────────────
 
     elif custom_id.startswith("clearemojis_yes:"):
         target = custom_id[len("clearemojis_yes:"):]
-        await interaction.response.defer()
         results = []
         async def clear_file(filename: str, label: str):
             try:
@@ -1672,7 +1670,6 @@ async def on_interaction(interaction: discord.Interaction):
         )])
 
     elif custom_id == "clearemojis_no":
-        await interaction.response.defer()
         await patch_msg(interaction, [container(txt("## Clear Cancelled"), sep(), txt("No Changes Were Made."))])
 
     # ── Delete Server Emojis ──────────────────────────────────────────────────
@@ -1681,7 +1678,6 @@ async def on_interaction(interaction: discord.Interaction):
         mode     = custom_id[len("delserver_yes:"):]
         guild_id = getattr(bot, "_delserver_guild", None) or (interaction.guild.id if interaction.guild else None)
         if not guild_id: await interaction.response.send_message("Session Expired.", ephemeral=True); return
-        await interaction.response.defer()
         headers = {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
         await patch_msg(interaction, [container(txt("## Deleting Server Emojis..."), sep(), txt("Fetching Emoji List From Server..."))])
         async with aiohttp.ClientSession() as session:
@@ -1739,7 +1735,6 @@ async def on_interaction(interaction: discord.Interaction):
         )])
 
     elif custom_id == "delserver_no":
-        await interaction.response.defer()
         await patch_msg(interaction, [container(txt("## Delete Cancelled"), sep(), txt("No Emojis Were Deleted From The Server."))])
 
 # ── /Refetchbroken ────────────────────────────────────────────────────────────
