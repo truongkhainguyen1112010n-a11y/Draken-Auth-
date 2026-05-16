@@ -21,7 +21,6 @@ GITHUB_REPO           = os.environ.get("GITHUB_REPO",           "thumbnails.json
 GITHUB_FILE           = os.environ.get("GITHUB_FILE",           "thumbnails.json")
 GITHUB_BRANCH         = os.environ.get("GITHUB_BRANCH",         "main")
 GITHUB_JSON_FILE      = os.environ.get("GITHUB_JSON_FILE",      "thumbnails1.json")
-GITHUB_EMOJI_FILE     = os.environ.get("GITHUB_EMOJI_FILE",     "emojis.lua")
 GITHUB_TRAITS_FILE    = os.environ.get("GITHUB_TRAITS_FILE",    "traits.lua")
 GITHUB_MUTATIONS_FILE = os.environ.get("GITHUB_MUTATIONS_FILE", "mutations.lua")
 SCRAPER_API_KEY       = os.environ.get("SCRAPER_API_KEY",       "")
@@ -99,15 +98,16 @@ def btn(label: str, custom_id: str, style: int = 2) -> dict:
     return {"type": 2, "style": style, "label": label, "custom_id": custom_id}
 
 def btn_yes(custom_id: str) -> dict:
-    return btn("Yes", custom_id, style=3)
+    return btn("Yes", custom_id, style=2)
 
 def btn_no(custom_id: str) -> dict:
-    return btn("No", custom_id, style=4)
+    return btn("No", custom_id, style=2)
 
-def progress_bar(done: int, total: int, width: int = 20) -> str:
+def progress_bar(done: int, total: int, width: int = 18) -> str:
     pct    = done / total if total else 1
     filled = int(pct * width)
-    return f"`[{'█' * filled}{'░' * (width - filled)}]` {done}/{total} ({int(pct * 100)}%)"
+    bar    = "█" * filled + "░" * (width - filled)
+    return f"`╔{bar}╗` {done}/{total} ({int(pct * 100)}%)"
 
 # ── Discord Helpers ───────────────────────────────────────────────────────────
 
@@ -786,16 +786,27 @@ async def fetchpet(interaction: discord.Interaction, name: str):
         bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
         bot._fetchpet_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
         return
-    try:
-        data[name] = railway_url
-        await push_pets(data, sha, f"[DK] Auto-Fetch Added: {name}")
-        ok = True
-    except Exception as e:
-        ok = False; err = str(e)
-    if ok:
-        await send_v2(interaction, [container(txt("## Pet Image Added Successfully"), sep(), section(f"**{name}**\n\n**Railway URL:**\n```\n{short_url}\n```", railway_url), sep(), txt("**GitHub**  Pushed & Sorted A To Z"))])
-    else:
-        await send_v2(interaction, [container(txt("## Failed To Save Pet"), sep(), txt(f"**Pet:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+    # Show confirm dialog before saving
+    wh_url2 = webhook_url(interaction)
+    payload2 = {
+        "flags": FLAGS_V2,
+        "components": [container(
+            txt("## Pet Image Found"),
+            sep(),
+            section(f"**{title_case(name)}**\n\n**Wiki URL:**\n```\n{short_url}\n```", railway_url),
+            sep(),
+            txt("**Save This Pet To GitHub?**"),
+            action_row(
+                btn("Save To GitHub", f"fetchpet_save:{name}", style=2),
+                btn("Discard",        f"fetchpet_discard:{name}", style=2),
+            ),
+        )],
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(wh_url2, json=payload2) as r:
+            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
+    bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
+    bot._fetchpet_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
 
 # ── /Syncpets ─────────────────────────────────────────────────────────────────
 
@@ -1051,7 +1062,9 @@ async def getemojis(interaction: discord.Interaction):
     except Exception as e:
         await followup(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
     try:
-        existing_emojis, _ = await gh_fetch(GITHUB_EMOJI_FILE)
+        t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_em, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        existing_emojis = {**t_em, **m_em}
     except Exception:
         existing_emojis = {}
     trait_names    = [n for n, _ in traits]
@@ -1077,7 +1090,7 @@ async def getemojis(interaction: discord.Interaction):
         await asyncio.sleep(0.5)
     total        = len(trait_names) + len(mutation_names)
     total_mapped = len(mapped_t) + len(mapped_m)
-    await followup(interaction, [container(txt("## Summary"), sep(), txt(f"**Traits:** {len(trait_names)}  ( {len(mapped_t)} Mapped     {len(unmapped_t)} Missing)\n**Mutations:** {len(mutation_names)}  ( {len(mapped_m)} Mapped     {len(unmapped_m)} Missing)\n\n**Total Mapped:** {total_mapped}    **Total Unmapped:** {total-total_mapped}\n\n**GitHub File:** `{GITHUB_EMOJI_FILE}`"))])
+    await followup(interaction, [container(txt("## Summary"), sep(), txt(f"**GitHub Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`"))])
 
 # ── /Addemojis ────────────────────────────────────────────────────────────────
 
@@ -1090,14 +1103,20 @@ async def addemojis(interaction: discord.Interaction, emoji_data: str):
     if not parsed:
         await send_v2(interaction, [container(txt("## No Valid Emojis Parsed"), sep(), txt("**Accepted Formats (One Per Line):**\n```\nDefault:1498945977409863751\n<:Default:1498945977409863751>\n```"))]); return
     try:
-        data, sha = await gh_fetch(GITHUB_EMOJI_FILE)
+        t_data, t_sha = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_data, m_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        data = {**t_data, **m_data}
     except Exception as e:
         await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Add Emojis\n\n**Error:**\n```\n{e}\n```"))]); return
     new_entries       = {k: v for k, v in parsed.items() if k not in data}
     overwrite_entries = {k: v for k, v in parsed.items() if k in data}
-    data.update(parsed)
+    for k, v in parsed.items():
+        if k in t_data: t_data[k] = v
+        if k in m_data: m_data[k] = v
+        if k not in t_data and k not in m_data: t_data[k] = v  # Default to traits
     try:
-        await gh_push(GITHUB_EMOJI_FILE, data, sha, f"[DK] Emojis Added/Updated: {', '.join(list(parsed.keys())[:5])}")
+        await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] Emojis Added: {', '.join(list(parsed.keys())[:5])}")
+        await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] Emojis Added: {', '.join(list(parsed.keys())[:5])}")
         ok = True
     except Exception as e:
         ok = False; err = str(e)
@@ -1115,7 +1134,7 @@ async def addemojis(interaction: discord.Interaction, emoji_data: str):
     new_list = "\n".join(f" `{k}`  `{v}`" for k in sorted(new_entries)[:15])
     ow_list  = "\n".join(f" `{k}`  `{v}`" for k in sorted(overwrite_entries)[:10])
     summary  = "\n".join(p for p in [f"**{len(new_entries)} New** Emoji(s) Added." if new_entries else "", f"**{len(overwrite_entries)} Existing** Emoji(s) Overwritten." if overwrite_entries else ""] if p)
-    items    = [txt("## Emojis Saved Successfully"), sep(), txt(f"{summary}\n\n**GitHub File:** `{GITHUB_EMOJI_FILE}`\n **Pushed & Sorted AZ**")]
+    items    = [txt("## Emojis Saved Successfully"), sep(), txt(f"{summary}\n\n**GitHub Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`\n**Pushed & Sorted A To Z**")]
     if new_list:  items += [sep(), txt(f"**New Entries:**\n{new_list}")]
     if ow_list:   items += [sep(), txt(f"**Overwritten:**\n{ow_list}")]
     items += [sep(), txt(f"**Lua Preview:**\n```lua\n{lua_preview}\n```")]
@@ -1128,15 +1147,17 @@ async def addemojis(interaction: discord.Interaction, emoji_data: str):
 async def listemojis(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
     try:
-        data, _ = await gh_fetch(GITHUB_EMOJI_FILE)
+        t_data, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_data, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        data = {**t_data, **m_data}
     except Exception as e:
         await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** List Emojis\n\n**Error:**\n```\n{e}\n```"))]); return
     if not data:
-        await send_v2(interaction, [container(txt("## No Emojis Saved Yet"), sep(), txt(f" **File:** `{GITHUB_EMOJI_FILE}` Is Empty.\n\nUse `/addemojis` To Start Adding Emoji IDs."))]); return
+        await send_v2(interaction, [container(txt("## No Emojis Saved Yet"), sep(), txt(f"**Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}` Are Empty.\n\nUse `/addemojis` To Start Adding Emoji IDs."))]); return
     sorted_items = sorted(data.items(), key=lambda x: x[0].lower())
     max_len      = max((len(k) for k in data), default=0)
     lua_lines    = ['    ["' + k + '"]' + " " * (max_len - len(k) + 1) + '= "' + v + '",' for k, v in sorted_items]
-    await followup(interaction, [container(txt("## All Saved Emojis"), sep(), txt(f" **File:** `{GITHUB_EMOJI_FILE}`    **{len(data)} Entries**"))])
+    await followup(interaction, [container(txt("## All Saved Emojis"), sep(), txt(f"**Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`  •  **{len(data)} Total Entries**"))])
     for i in range(0, len(lua_lines), 30):
         await followup(interaction, [container(txt(f"```lua\n{chr(10).join(lua_lines[i:i+30])}\n```"))])
         await asyncio.sleep(0.5)
@@ -1149,7 +1170,9 @@ async def listemojis(interaction: discord.Interaction):
 async def deleteemoji(interaction: discord.Interaction, name: str):
     await interaction.response.defer(thinking=True)
     try:
-        data, sha = await gh_fetch(GITHUB_EMOJI_FILE)
+        t_data, t_sha = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_data, m_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        data = {**t_data, **m_data}
     except Exception as e:
         await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Delete Emoji\n**Name:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
     if name not in data:
@@ -1158,13 +1181,16 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
         if suggestions: items += [sep(), txt("**Similar Names:**\n" + "\n".join(f" `{s}`" for s in suggestions[:8]))]
         await send_v2(interaction, [container(*items)]); return
     deleted_val = data.pop(name)
+    if name in t_data: t_data.pop(name)
+    if name in m_data: m_data.pop(name)
     try:
-        await gh_push(GITHUB_EMOJI_FILE, data, sha, f"[DK] Emoji Deleted: {name}")
+        await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] Emoji Deleted: {name}")
+        await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] Emoji Deleted: {name}")
         ok = True
     except Exception as e:
         ok = False; err = str(e)
     if ok:
-        await send_v2(interaction, [container(txt("## Emoji Deleted"), sep(), txt(f"**Name:** `{name}`\n**Deleted Value:** `{deleted_val}`\n\n**GitHub**  Pushed & Sorted A To Z\n**Remaining:** {len(data)} Emojis"))])
+        await send_v2(interaction, [container(txt("## Emoji Deleted"), sep(), txt(f"**Name:** `{name}`\n**Deleted Value:** `{deleted_val}`\n\n**GitHub** — Pushed & Sorted A To Z\n**Remaining:** {len(data)} Emojis"))])
     else:
         await send_v2(interaction, [container(txt("## Failed To Delete Emoji"), sep(), txt(f"**Name:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
 
@@ -1174,7 +1200,6 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(target="Which File(s) To Clear")
 @discord.app_commands.choices(target=[
-    discord.app_commands.Choice(name="emojis.lua (All)",              value="all"),
     discord.app_commands.Choice(name="traits.lua Only",               value="traits"),
     discord.app_commands.Choice(name="mutations.lua Only",            value="mutations"),
     discord.app_commands.Choice(name="traits.lua + mutations.lua",    value="both"),
@@ -1182,7 +1207,6 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
 async def clearemojis(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True)
     files_desc = {
-        "all":       f"`{GITHUB_EMOJI_FILE}` (All Emoji IDs)",
         "traits":    f"`{GITHUB_TRAITS_FILE}`",
         "mutations": f"`{GITHUB_MUTATIONS_FILE}`",
         "both":      f"`{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`",
@@ -1210,7 +1234,11 @@ async def syncemojis(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
     await followup(interaction, [container(txt("## Syncing Emoji Map With Wiki..."), sep(), txt("Scraping Traits & Mutations + Loading GitHub  Please Wait..."))])
     try:
-        traits, mutations, (existing_emojis, sha) = await asyncio.gather(scrape_traits(), scrape_mutations(), gh_fetch(GITHUB_EMOJI_FILE))
+        traits_res, mutations_res = await asyncio.gather(scrape_traits(), scrape_mutations())
+        t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_em, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        traits, mutations, existing_emojis = traits_res, mutations_res, {**t_em, **m_em}
+        sha = ""  # Not needed — we push to individual files
     except Exception as e:
         await followup(interaction, [container(txt("## Error"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
     trait_names    = [n for n, _ in traits]
@@ -1219,7 +1247,7 @@ async def syncemojis(interaction: discord.Interaction):
     unmapped       = [n for n in all_names if n not in existing_emojis]
     mapped         = [n for n in all_names if n in existing_emojis]
     if not unmapped:
-        await followup(interaction, [container(txt("## All Names Are Fully Mapped"), sep(), txt(f"**{len(all_names)} Names** All Have Emoji IDs In `{GITHUB_EMOJI_FILE}`. Nothing To Add!"))]); return
+        await followup(interaction, [container(txt("## All Names Are Fully Mapped"), sep(), txt(f"**{len(all_names)} Names** All Have Emoji IDs In `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`. Nothing To Add!"))]); return
     unmapped_block = "\n".join(unmapped)
     await followup(interaction, [container(txt("## Names Missing Emoji IDs"), sep(), txt(f"**{len(unmapped)} / {len(all_names)} Names Need Emoji IDs:**\n\n```\n{unmapped_block[:1800]}\n```\n\nAdd `:emoji_id` After Each Name, Then Run `/addemojis`"))])
     if mapped:
@@ -1276,7 +1304,9 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         await followup(interaction, [container(txt("## Wiki Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
     try:
-        existing_emojis, emoji_sha = await gh_fetch(GITHUB_EMOJI_FILE)
+        t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_em, emoji_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        existing_emojis = {**t_em, **m_em}
     except Exception as e:
         await followup(interaction, [container(txt("## GitHub Load Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
@@ -1374,66 +1404,52 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                 break
             await asyncio.sleep(3.0)
 
-    # Step 3: Save to GitHub
-    await followup(interaction, [container(txt("## Step 3/4  Saving To GitHub..."), sep(), txt(f"**Uploaded:** {len(uploaded_ok)}    **Failed:** {len(failed_upload)+len(failed_dl)}\nPushing To `{GITHUB_EMOJI_FILE}`..."))])
-
-    push_ok  = True
-    push_err = ""
-    if uploaded_ok:
-        try:
-            existing_emojis, emoji_sha = await gh_fetch(GITHUB_EMOJI_FILE)
-        except Exception: pass
-        for name, emoji_str in uploaded_ok:
-            existing_emojis[name] = emoji_str
-        try:
-            await gh_push(GITHUB_EMOJI_FILE, existing_emojis, emoji_sha, f"[DK] AutoEmojis: Added {len(uploaded_ok)} Emojis")
-        except Exception as pe:
-            push_ok  = False
-            push_err = str(pe)
-        try:
-            trait_names_set    = {n for n, _ in traits_data}
-            mutation_names_set = {n for n, _ in mutations_data}
-            t_data, t_sha = await gh_fetch(GITHUB_TRAITS_FILE)
-            m_data, m_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
-            changed_t = changed_m = False
-            for name, emoji_str in uploaded_ok:
-                if name in trait_names_set:    t_data[name] = emoji_str; changed_t = True
-                if name in mutation_names_set: m_data[name] = emoji_str; changed_m = True
-            if changed_t: await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] Traits Emoji: +{len(uploaded_ok)}")
-            if changed_m: await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] Mutations Emoji: +{len(uploaded_ok)}")
-        except Exception: pass
-
-    # Final report
-    ok_preview   = "\n".join(f" {es}  `{n}`" for n, es in uploaded_ok[:30])
+    # Step 3: Show confirm dialog — ask before saving to GitHub
+    ok_preview   = "\n".join(f"{es}  `{n}`" for n, es in uploaded_ok[:30])
     if len(uploaded_ok) > 30: ok_preview += f"\n*...And {len(uploaded_ok)-30} More*"
-    other_fails  = [e for e in failed_upload]
-    all_not_done = failed_dl + other_fails
+    all_not_done = failed_dl + list(failed_upload)
     fail_txt     = ""
     if all_not_done:
-        fail_txt += f"\n\n**Failed ({len(all_not_done)}):**\n" + "\n".join(f" {e}" for e in all_not_done[:10])
+        fail_txt = "\n\n**Failed:**\n" + "\n".join(f"• {e}" for e in all_not_done[:10])
     no_img_txt = ""
     if no_image:
         no_img_names = ", ".join(f"`{n}`" for n, _ in no_image[:15])
-        more_img     = f" *+{len(no_image)-15} More*" if len(no_image) > 15 else ""
-        no_img_txt   = f"\n\n**No Wiki Image ({len(no_image)}):** {no_img_names}{more_img}"
+        no_img_txt   = f"\n\n**No Image ({len(no_image)}):** {no_img_names}"
     skipped_txt = ""
     if skipped_by_limit:
-        skipped_txt  = f"\n\n**Not Uploaded  Server Full ({len(skipped_by_limit)}):**\n"
-        skipped_txt += "\n".join(f" `{n}`" for n in skipped_by_limit[:20])
+        skipped_txt = f"\n\n**Server Full — Not Uploaded ({len(skipped_by_limit)}):**\n"
+        skipped_txt += "\n".join(f"• `{n}`" for n in skipped_by_limit[:20])
         if len(skipped_by_limit) > 20: skipped_txt += f"\n*...And {len(skipped_by_limit)-20} More*"
-        skipped_txt += "\n\nUse `/deleteserveremojis` Then Re-Run `/autoemojis`"
 
-    await followup(interaction, [container(
-        txt("## Auto Emoji Upload Complete"), sep(),
-        txt(
-            f"**Uploaded & Saved:** {len(uploaded_ok)}\n"
-            f"**Failed:** {len(all_not_done)}\n"
-            f" **GitHub**  {' Pushed' if push_ok else f' Failed: {push_err[:100]}'}"
-            f"{fail_txt}{no_img_txt}{skipped_txt}"
-        ),
-    )])
-    if ok_preview:
-        await followup(interaction, [container(txt("## Emojis Added"), sep(), txt(f"**New Emojis (Preview):**\n\n{ok_preview}"))])
+    wh_url  = webhook_url(interaction)
+    payload = {
+        "flags": FLAGS_V2,
+        "components": [container(
+            txt("## Auto Emoji Upload Complete"),
+            sep(),
+            txt(
+                f"**Uploaded:** {len(uploaded_ok)}  •  **Failed:** {len(all_not_done)}"
+                f"{fail_txt}{no_img_txt}{skipped_txt}"
+                + (f"\n\n**Preview:**\n{ok_preview}" if ok_preview else "")
+            ),
+            sep(),
+            txt("**Save These Emojis To GitHub?**\n`traits.lua` + `mutations.lua` Will Be Updated."),
+            action_row(
+                btn("Save To GitHub", f"autoemoji_save:{id(uploaded_ok)}", style=2),
+                btn("Discard", f"autoemoji_discard:{id(uploaded_ok)}", style=2),
+            ),
+        )],
+    }
+    async with aiohttp.ClientSession() as s:
+        await s.post(wh_url, json=payload)
+
+    # Store pending data for button handler
+    bot._autoemoji_pending = getattr(bot, "_autoemoji_pending", {})
+    bot._autoemoji_pending[str(id(uploaded_ok))] = {
+        "uploaded_ok":   uploaded_ok,
+        "traits_data":   traits_data,
+        "mutations_data": mutations_data,
+    }
 
 # ── /Savemutations ────────────────────────────────────────────────────────────
 
@@ -1449,7 +1465,9 @@ async def savemutations(interaction: discord.Interaction):
     if not mutations:
         await followup(interaction, [container(txt("## No Mutations Found"), sep(), txt("Could Not Find Any Mutations On The Wiki Page."))]); return
     try:
-        emoji_map, _ = await gh_fetch(GITHUB_EMOJI_FILE)
+        t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        emoji_map, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        emoji_map = {**t_em, **emoji_map}
     except Exception:
         emoji_map = {}
     try:
@@ -1490,7 +1508,9 @@ async def savetraits(interaction: discord.Interaction):
     if not traits:
         await followup(interaction, [container(txt("## No Traits Found"), sep(), txt("Could Not Find Any Traits On The Wiki Page."))]); return
     try:
-        emoji_map, _ = await gh_fetch(GITHUB_EMOJI_FILE)
+        m_em, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        emoji_map, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        emoji_map = {**emoji_map, **m_em}
     except Exception:
         emoji_map = {}
     try:
@@ -1667,8 +1687,7 @@ async def on_interaction(interaction: discord.Interaction):
                 results.append(f" `{label}`  Cleared Successfully")
             except Exception as e:
                 results.append(f" `{label}`  Error: {str(e)[:80]}")
-        if target == "all":       await clear_file(GITHUB_EMOJI_FILE, "emojis.lua")
-        elif target == "traits":  await clear_file(GITHUB_TRAITS_FILE, "traits.lua")
+        if target == "traits":  await clear_file(GITHUB_TRAITS_FILE, "traits.lua")
         elif target == "mutations": await clear_file(GITHUB_MUTATIONS_FILE, "mutations.lua")
         elif target == "both":
             await clear_file(GITHUB_TRAITS_FILE, "traits.lua")
@@ -1699,7 +1718,9 @@ async def on_interaction(interaction: discord.Interaction):
                 await patch_msg(interaction, [container(txt("## No Emojis In Server"), sep(), txt("There Are No Emojis To Delete!"))]); return
             if mode == "bot_only":
                 try:
-                    bot_emoji_data, _ = await gh_fetch(GITHUB_EMOJI_FILE)
+                    t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+                    m_em, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+                    bot_emoji_data = {**t_em, **m_em}
                     bot_ids = set()
                     for v in bot_emoji_data.values():
                         m = re.search(r"<:[^:]+:(\d+)>", v)
@@ -1956,7 +1977,6 @@ async def ensure_files():
     files = [
         (GITHUB_FILE,          "{}",  True),   # thumbnails.json  — JSON
         (GITHUB_JSON_FILE,     "{}",  True),   # thumbnails1.json — JSON
-        (GITHUB_EMOJI_FILE,    "",    False),   # emojis.lua       — Lua
         (GITHUB_TRAITS_FILE,   "",    False),   # traits.lua       — Lua
         (GITHUB_MUTATIONS_FILE,"",    False),   # mutations.lua    — Lua
     ]
@@ -1998,7 +2018,6 @@ async def on_ready():
     print(f"[DK] Slash Commands Synced! ({len(tree.get_commands())} Commands)")
     print(f"[DK] GitHub Files:")
     print(f"[DK]    Pets:      {GITHUB_FILE}")
-    print(f"[DK]    Emojis:    {GITHUB_EMOJI_FILE}")
     print(f"[DK]    Traits:    {GITHUB_TRAITS_FILE}")
     print(f"[DK]    Mutations: {GITHUB_MUTATIONS_FILE}")
     print(f"[DK] Max Emoji Slots: Dynamic (Based On Boost Tier)")
