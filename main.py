@@ -1678,7 +1678,7 @@ async def on_interaction(interaction: discord.Interaction):
         mode     = custom_id[len("delserver_yes:"):]
         guild_id = getattr(bot, "_delserver_guild", None) or (interaction.guild.id if interaction.guild else None)
         if not guild_id: await interaction.response.send_message("Session Expired.", ephemeral=True); return
-        headers = {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bot {BOT_TOKEN}"}
         await patch_msg(interaction, [container(txt("## Deleting Server Emojis..."), sep(), txt("Fetching Emoji List From Server..."))])
         async with aiohttp.ClientSession() as session:
             async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/emojis", headers=headers) as r:
