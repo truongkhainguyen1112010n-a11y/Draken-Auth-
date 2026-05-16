@@ -503,46 +503,44 @@ async def scrape_traits() -> list[tuple[str, str | None]]:
     return await _scrape_wiki_table("https://stealabrainrot.fandom.com/wiki/Traits")
 
 
-async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
+async def scrape_category_brainrots(
+    on_page=None,  # optional: async callable(page, total_so_far, method, next_url)
+) -> list[tuple[str, str | None]]:
     """
-    Scrape ALL brainrot names + images directly from Category:Listed_Brainrots.
-    Uses <link rel="next"> for pagination. Creates a fresh session per page
-    so Cloudflare does not block subsequent requests (shared session gets rate-limited).
+    Scrape ALL brainrots from Category:Listed_Brainrots.
+    - Fresh session per page to beat Cloudflare rate-limiting.
+    - Validates with 'category-page__member' marker (not just <!DOCTYPE>).
+    - Falls back to MediaWiki JSON API if HTML scraping is stuck on page 1.
     """
     BASE_URL  = "https://stealabrainrot.fandom.com"
     start_url = BASE_URL + "/wiki/Category:Listed_Brainrots"
     timeout   = aiohttp.ClientTimeout(total=40)
     hdrs      = {
         "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
-        "Accept-Encoding": "gzip, deflate",   # avoid brotli which aiohttp may not decode
+        "Accept-Encoding": "gzip, deflate",
         "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
-    LI_PAT       = re.compile('<li class="category-page__member">(.*?)</li>', re.DOTALL)
-    NAME_PAT     = re.compile('class="category-page__member-link"[^>]*>([^<]+)<')
-    DATA_SRC_PAT = re.compile(r'\bdata-src=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
-    SRC_PAT      = re.compile(r'\bsrc=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
+    LI_PAT       = re.compile(r'<li class="category-page__member">(.*?)</li>', re.DOTALL)
+    NAME_PAT     = re.compile(r'class="category-page__member-link"[^>]*>([^<]+)<')
+    DATA_SRC_PAT = re.compile(r'\bdata-src=["\'](' + r'https://static\.wikia\.nocookie\.net/[^"\']+' + r')["\']')
+    SRC_PAT      = re.compile(r'\bsrc=["\'](' + r'https://static\.wikia\.nocookie\.net/[^"\']+' + r')["\']')
 
     all_results:  list[tuple[str, str | None]] = []
     seen_names:   set[str] = set()
     visited_urls: set[str] = set()
-    next_url: str | None   = start_url
 
-    async def _fetch_page(url: str) -> str | None:
-        """Fetch one category page — fresh session per call to beat Cloudflare.
-        Validates content by checking for 'category-page__member' (real category HTML),
-        not just <!DOCTYPE>, since Cloudflare challenge pages also have DOCTYPE."""
+    async def _fetch_html(url: str) -> tuple[str | None, str]:
+        """Return (html, method). Method = 'Direct' | 'ScraperAPI' | 'Failed'."""
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
-            # Attempt 1: direct fetch
             try:
                 async with session.get(url, headers=hdrs, timeout=timeout) as r:
                     body = await r.text()
                     if r.status == 200 and "category-page__member" in body:
-                        return body
+                        return body, "Direct"
             except Exception:
                 pass
-            # Attempt 2: ScraperAPI (handles Cloudflare / IP blocks)
             if SCRAPER_API_KEY:
                 try:
                     async with session.get(
@@ -550,35 +548,31 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
                         params={"api_key": SCRAPER_API_KEY, "url": url, "render": "false"},
                         timeout=timeout,
                     ) as r:
-                        if r.status == 200:
-                            body = await r.text()
-                            if "category-page__member" in body:
-                                return body
+                        body = await r.text()
+                        if r.status == 200 and "category-page__member" in body:
+                            return body, "ScraperAPI"
                 except Exception:
                     pass
-        return None
+        return None, "Failed"
 
-    async def _api_fetch_all_names() -> list[str]:
-        """MediaWiki API fallback — bypasses Cloudflare, returns all member names as JSON.
-        Used when direct HTML scraping can't get past page 1."""
-        API_URL = "https://stealabrainrot.fandom.com/api.php"
+    async def _api_get_all_names() -> list[str]:
+        """MediaWiki JSON API — no Cloudflare, returns all member names."""
         names: list[str] = []
         cont: str | None = None
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
-            for _ in range(20):   # safety cap
+            for _ in range(20):
                 params: dict = {
-                    "action":      "query",
-                    "list":        "categorymembers",
-                    "cmtitle":     "Category:Listed_Brainrots",
-                    "cmlimit":     "500",
-                    "cmnamespace": "0",
-                    "format":      "json",
+                    "action": "query", "list": "categorymembers",
+                    "cmtitle": "Category:Listed_Brainrots",
+                    "cmlimit": "500", "cmnamespace": "0", "format": "json",
                 }
                 if cont:
                     params["cmcontinue"] = cont
                 try:
-                    async with session.get(API_URL, params=params, headers=hdrs, timeout=timeout) as r:
+                    async with session.get(
+                        BASE_URL + "/api.php", params=params, headers=hdrs, timeout=timeout
+                    ) as r:
                         if r.status != 200:
                             break
                         jdata = await r.json(content_type=None)
@@ -592,498 +586,130 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
                     break
         return names
 
-    while next_url and next_url not in visited_urls:
-        visited_urls.add(next_url)
-
-        html = await _fetch_page(next_url)
-        if not html:
-            break
-
+    def _parse_items(html: str) -> list[tuple[str, str | None]]:
+        items = []
         for li in LI_PAT.finditer(html):
             block = li.group(1)
-
-            nm   = NAME_PAT.search(block)
-            name = nm.group(1).strip() if nm else None
+            nm    = NAME_PAT.search(block)
+            name  = nm.group(1).strip() if nm else None
             if not name:
-                t    = re.search('title="([^"]+)"', block)
+                t    = re.search(r'title="([^"]+)"', block)
                 name = t.group(1) if t else None
             if not name or name in seen_names:
                 continue
             seen_names.add(name)
-
-            # Prefer data-src (lazy-load full thumbnail) over src (tiny placeholder)
-            ns_idx = block.find("<noscript>")
-            look   = block[:ns_idx] if ns_idx > 0 else block
-            im     = DATA_SRC_PAT.search(look) or SRC_PAT.search(look)
+            ns_idx  = block.find("<noscript>")
+            look    = block[:ns_idx] if ns_idx > 0 else block
+            im      = DATA_SRC_PAT.search(look) or SRC_PAT.search(look)
             img_url = to_railway(_clean_wikia_url(im.group(1))) if im else None
+            items.append((name, img_url))
+        return items
 
-            all_results.append((name, img_url))
-
-        # Find next page via <link rel="next"> (most reliable Fandom pagination signal)
-        next_url = None
-        rel_next = re.search(
-            r'<link\s+rel=["\']next["\']\s+href=["\']([^"\']+)["\']'
-            r'|<link\s+href=["\']([^"\']+)["\']\s+rel=["\']next["\']',
+    def _find_next(html: str) -> str | None:
+        rel = re.search(
+            r'<link\s+rel=["\'"]next["\'"]\s+href=["\'"]([^"\']+)["\'\']',
             html,
         )
-        if rel_next:
-            next_url = rel_next.group(1) or rel_next.group(2)
+        if rel:
+            return rel.group(1)
+        matches = re.findall(
+            r'href=["\'](https://stealabrainrot\.fandom\.com/wiki/Category:Listed_Brainrots\?from=[^"\']+)["\']',
+            html,
+        )
+        for c in reversed(matches):
+            if c not in visited_urls:
+                return c
+        return None
+
+    # ── Main Pagination Loop ──────────────────────────────────────────────────
+
+    next_url: str | None = start_url
+    page = 0
+
+    while next_url and next_url not in visited_urls:
+        visited_urls.add(next_url)
+        page += 1
+
+        html, method = await _fetch_html(next_url)
+        if html:
+            items    = _parse_items(html)
+            all_results.extend(items)
+            next_url = _find_next(html)
         else:
-            # Fallback: scan full-URL pagination buttons
-            btn_matches = re.findall(
-                r'href=["\'](https://stealabrainrot\.fandom\.com/wiki/Category:Listed_Brainrots\?from=[^"\']+)["\']',
-                html,
-            )
-            for candidate in reversed(btn_matches):
-                if candidate not in visited_urls:
-                    next_url = candidate
-                    break
+            next_url = None
+
+        if on_page:
+            await on_page(page, len(all_results), method, next_url)
 
         if next_url:
-            await asyncio.sleep(0.8)   # polite delay between pages
+            await asyncio.sleep(0.8)
 
-    # ── MediaWiki API fallback ────────────────────────────────────────────────
-    # If HTML scraping only got page 1 (Cloudflare blocked subsequent pages),
-    # use the API to get the remaining names (no images — those stay as None).
-    if len(visited_urls) <= 1:
-        api_names = await _api_fetch_all_names()
+    # ── MediaWiki API Fallback ────────────────────────────────────────────────
+    # Triggered when Cloudflare blocked HTML pages 2+ (only 1 page visited).
+    if page <= 1:
+        api_names = await _api_get_all_names()
+        api_added = 0
         for name in api_names:
             if name not in seen_names:
                 seen_names.add(name)
                 all_results.append((name, None))
+                api_added += 1
+        if on_page and api_added:
+            await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names)", None)
 
     return all_results
 
-# ── Image Processing ──────────────────────────────────────────────────────────
-
-# ── Download & Resize ─────────────────────────────────────────────────────────
-
-async def download_and_resize(url: str, session: aiohttp.ClientSession) -> bytes | None:
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
-            if r.status != 200: return None
-            raw = await r.read()
-    except Exception: return None
-    try:
-        img = Image.open(io.BytesIO(raw)).convert("RGBA")
-        img = img.resize((256, 256), Image.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        data = buf.getvalue()
-        return data if len(data) <= 256_000 else None
-    except Exception: return None
-
-
-# ── Emoji Utils ───────────────────────────────────────────────────────────────
-
-def sanitize_name(name: str) -> str:
-    clean = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    clean = re.sub(r'_+', '_', clean).strip('_')
-    if len(clean) < 2: clean = clean + '_e'
-    return clean[:32]
-
-
-async def upload_emoji(guild_id: int, bot_token: str, name: str, image_bytes: bytes, session: aiohttp.ClientSession) -> tuple[dict | None, str]:
-    if image_bytes[:8] == b'\x89PNG\r\n\x1a\n': mime = "image/png"
-    elif image_bytes[:3] == b'GIF':             mime = "image/gif"
-    else:                                        mime = "image/jpeg"
-    b64     = base64.b64encode(image_bytes).decode()
-    payload = {"name": name, "image": f"data:{mime};base64,{b64}"}
-    url     = f"https://discord.com/api/v10/guilds/{guild_id}/emojis"
-    headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
-    for _ in range(4):
-        async with session.post(url, json=payload, headers=headers) as r:
-            if r.status in (200, 201): return await r.json(), ""
-            body = await r.text()
-            if r.status == 429:
-                try:    retry_after = json.loads(body).get("retry_after", 2.0)
-                except: retry_after = 2.0
-                await asyncio.sleep(float(retry_after) + 0.5)
-                continue
-            try:
-                err_json = json.loads(body)
-                err_msg  = err_json.get("message", body[:100])
-                if r.status == 400:
-                    if "File cannot be larger" in err_msg or "2048" in err_msg: err_msg = "Image Too Large (>256KB After Resize)"
-                    elif "Invalid image" in err_msg:                             err_msg = "Invalid Image Format"
-                    elif "Maximum number" in err_msg:                            err_msg = "SERVER_FULL"
-                    elif "Invalid Form Body" in err_msg:
-                        details = err_json.get("errors", {})
-                        err_msg = f"Form Error: {str(details)[:80]}"
-                elif r.status in (401, 403): err_msg = f"No Permission ({r.status})  Bot Needs Manage Emojis"
-                else:                        err_msg = f"HTTP {r.status}: {err_msg}"
-            except Exception: err_msg = f"HTTP {r.status}: {body[:100]}"
-            return None, err_msg
-    return None, "Rate Limited  Max Retries"
-
-
-def parse_emoji_input(raw: str) -> dict[str, str]:
-    result = {}
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line: continue
-        m = re.search(r'<:([A-Za-z0-9_]+):(\d+)>', line)
-        if m:
-            result[m.group(1)] = f"<:{m.group(1)}:{m.group(2)}>"
-            continue
-        m = re.match(r'^([A-Za-z0-9_ ]+?)\s*:\s*(\d{10,25})$', line)
-        if m:
-            name = m.group(1).strip()
-            result[name] = f"<:{name}:{m.group(2)}>"
-    return result
-
-# ══════════════════════════════════  COMMANDS  ══════════════════════════════════
-
-# ── /Ping ─────────────────────────────────────────────────────────────────────
-
-@tree.command(name="ping", description="Check The Bot's Latency And Connection Status.")
-@discord.app_commands.default_permissions(administrator=True)
-async def ping(interaction: discord.Interaction):
-    start = time.monotonic()
-    await interaction.response.defer(thinking=True)
-    latency_ms = round((time.monotonic() - start) * 1000)
-    ws_ms      = round(bot.latency * 1000)
-    status     = "Excellent" if ws_ms < 80 else "Normal" if ws_ms < 150 else "Slow"
-    await send_v2(interaction, [container(
-        txt("## Pong"),
-        sep(),
-        txt(f"**Websocket Latency:** `{ws_ms}ms`"),
-        sep_sm(),
-        txt(f"**Response Time:** `{latency_ms}ms`"),
-        sep_sm(),
-        txt(f"**Status:** {status}"),
-    )])
-
-# ── /Addpet ───────────────────────────────────────────────────────────────────
-
-@tree.command(name="addpet", description="Add A New Pet With Its Thumbnail URL To GitHub.")
-@discord.app_commands.default_permissions(administrator=True)
-async def addpet(interaction: discord.Interaction, name: str, url: str):
-    await interaction.response.defer(thinking=True)
-    converted = to_railway(url)
-    label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
-    try:
-        data, sha = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Add Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))])
-        return
-    if name in data:
-        exist = data[name]
-        await send_v2(interaction, [container(
-            txt("## Pet Already Exists"),
-            sep(),
-            section(f"**{name}**", exist),
-            sep(),
-            txt(f"**Current URL:**\n```\n{shorten(exist, 240)}\n```"),
-            sep(),
-            txt(f"**New URL You Tried:**\n```\n{shorten(converted, 240)}\n```"),
-            sep_sm(),
-            txt("Use `/updatepet` To Change The URL."),
-        )])
-        return
-    try:
-        data[name] = converted
-        await push_pets(data, sha, f"[DK] Added: {name}")
-        ok = True
-    except Exception as e:
-        ok = False; err = str(e)
-    if ok:
-        label_text = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
-        await send_v2(interaction, [container(txt("## Pet Added Successfully"),
-        sep(),
-        section(f"**{title_case(name)}**\n\n{label_text}", converted),
-        sep(),
-        txt(f"**URL:**\n```\n{shorten(converted)}\n```"),
-        sep(),
-        txt("**GitHub** — Pushed & Sorted A To Z"))])
-    else:
-        await send_v2(interaction, [container(txt("## Failed To Add Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub**  Push Failed\n```\n{err[:200]}\n```"))])
-
-# ── /Updatepet ────────────────────────────────────────────────────────────────
-
-@tree.command(name="updatepet", description="Update The Thumbnail URL Of An Existing Pet.")
-@discord.app_commands.default_permissions(administrator=True)
-async def updatepet(interaction: discord.Interaction, name: str, url: str):
-    await interaction.response.defer(thinking=True)
-    converted = to_railway(url)
-    label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
-    try:
-        data, sha = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Update Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))])
-        return
-    if name not in data:
-        suggestions = [k for k in data if name.lower() in k.lower()]
-        items = [txt(f"## Pet Not Found\n**Pet:** `{name}`")]
-        if suggestions: items += [sep(), txt("**Similar Pets:**\n" + "\n".join(f" `{s}`" for s in suggestions[:8]))]
-        await send_v2(interaction, [container(*items)]); return
-    old_url = data[name]
-    try:
-        data[name] = converted
-        await push_pets(data, sha, f"[DK] Updated: {name}")
-        ok = True
-    except Exception as e:
-        ok = False; err = str(e)
-    if ok:
-        await send_v2(interaction, [container(txt("## Pet Updated Successfully"),
-        sep(),
-        section(f"**{name}**\n\n{label}", converted),
-        sep(),
-        txt(f"**New URL:**\n```\n{shorten(converted, 240)}\n```"),
-        sep(),
-        txt(f"**Previous URL:**\n```\n{shorten(old_url, 200)}\n```"),
-        sep(),
-        txt("**GitHub** — Pushed & Sorted A To Z"))])
-    else:
-        await send_v2(interaction, [container(txt("## Failed To Update Pet"), sep(), txt(f"**Pet:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
-
-# ── /Deletepet ────────────────────────────────────────────────────────────────
-
-@tree.command(name="deletepet", description="Delete A Pet And Its Thumbnail URL From GitHub.")
-@discord.app_commands.default_permissions(administrator=True)
-async def deletepet(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
-    try:
-        data, sha = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Delete Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))])
-        return
-    if name not in data:
-        suggestions = [k for k in data if name.lower() in k.lower()]
-        items = [txt(f"##  Pet Not Found\n**Pet:** `{name}`")]
-        if suggestions: items += [sep(), txt("**Similar Pets:**\n" + "\n".join(f" `{s}`" for s in suggestions[:8]))]
-        await send_v2(interaction, [container(*items)]); return
-    deleted_url = data[name]
-    wh_url      = webhook_url(interaction)
-    payload = {
-        "flags": FLAGS_V2,
-        "components": [
-            container(
-                txt("## Confirm Delete Pet"),
-                sep(),
-                section(f"**{name}**", deleted_url),
-                sep(),
-                txt(f"**URL:**\n```\n{shorten(deleted_url, 200)}\n```"),
-                sep_sm(),
-                txt("Are You Sure You Want To Delete This Pet?"),
-                action_row(btn_yes(f"delpet_yes:{name}"), btn_no("delpet_no")),
-            ),
-        ],
-    }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(wh_url, json=payload) as r:
-            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
-    bot._delpet_pending = getattr(bot, "_delpet_pending", {})
-    bot._delpet_pending[name] = {"data": data, "sha": sha, "url": deleted_url}
-
-# ── /Getpet ───────────────────────────────────────────────────────────────────
-
-@tree.command(name="getpet", description="Get The Thumbnail URL Of A Specific Pet.")
-@discord.app_commands.default_permissions(administrator=True)
-async def getpet(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
-    try:
-        data, _ = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Get Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
-    if name not in data:
-        suggestions = [k for k in data if name.lower() in k.lower()]
-        items = [txt(f"##  Pet Not Found\n**Pet:** `{name}`")]
-        if suggestions: items += [sep(), txt("** Did You Mean:**\n" + "\n".join(f" `{s}`" for s in suggestions[:5]))]
-        await send_v2(interaction, [container(*items)]); return
-    url_val = data[name]
-    await send_v2(interaction, [container(txt("## Pet Thumbnail"),
-    sep(),
-    section(f"**{name}**", url_val),
-    sep(),
-    txt(f"**URL:**\n```\n{shorten(url_val)}\n```"))])
-
-# ── /Searchpet ────────────────────────────────────────────────────────────────
-
-@tree.command(name="searchpet", description="Search For Pets By Name Or Keyword.")
-@discord.app_commands.default_permissions(administrator=True)
-async def searchpet(interaction: discord.Interaction, query: str):
-    await interaction.response.defer(thinking=True)
-    try:
-        data, _ = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Search Pets\n **Query:** `{query}`\n\n**Error:**\n```\n{e}\n```"))]); return
-    matches = sorted([k for k in data if query.lower() in k.lower()])
-    if not matches:
-        await send_v2(interaction, [container(txt(f"## No Results Found\n **Query:** `{query}`"))]); return
-    top     = matches[0]
-    top_url = data[top]
-    items   = [
-        txt(f"## Search Results For `{query}`"),
-        sep(),
-        section(f"**Top Match:** `{top}`", top_url),
-        sep(),
-        txt(f"**URL:**\n```\n{shorten(top_url, 240)}\n```"),
-    ]
-    if len(matches) > 1:
-        items += [sep(), txt(f"**Other Matches ({len(matches)-1}):**\n" + "\n".join(f" `{m}`" for m in matches[1:26]))]
-    items += [sep(), txt(f"**Total Matches:** {len(matches)} / {len(data)} Pets")]
-    await send_v2(interaction, [container(*items)])
-
-# ── /Listpets ─────────────────────────────────────────────────────────────────
-
-@tree.command(name="listpets", description="List All Pets And Their Thumbnails Stored In GitHub.")
-@discord.app_commands.default_permissions(administrator=True)
-async def listpets(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
-    try:
-        data, _ = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** List Pets\n\n**Error:**\n```\n{e}\n```"))]); return
-    railway_count = sum(1 for v in data.values() if is_railway(v))
-    cdn_count     = sum(1 for v in data.values() if is_cdn(v))
-    other_count   = len(data) - railway_count - cdn_count
-    pet_names     = sorted(data.keys(), key=lambda x: x.lower())
-    await followup(interaction, [container(
-        txt("## Full Pet List"),
-        sep(),
-        txt(f"**Total Pets:** {len(data)}  •  **Wiki:** {railway_count}  •  **CDN:** {cdn_count}  •  **Other:** {other_count}"),
-        sep(),
-        txt("**All Pets (A To Z) — Loading Thumbnails Below...**"),
-    )])
-    for i in range(0, len(pet_names), 5):
-        chunk = pet_names[i:i+5]
-        items = []
-        for j, pname in enumerate(chunk):
-            if j > 0: items.append(sep())
-            items.append(section(f"**{pname}**", data[pname]))
-        await followup(interaction, [container(*items)])
-        await asyncio.sleep(0.8)
-    await followup(interaction, [container(txt(f"**Done  {len(pet_names)} Pets Listed.**"))])
-
-# ── /Fetchpet ─────────────────────────────────────────────────────────────────
-
-@tree.command(name="fetchpet", description="Auto-Fetch A Pet's Image From The Fandom Wiki And Save It.")
-@discord.app_commands.default_permissions(administrator=True)
-async def fetchpet(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
-    try:
-        wikia_url, debug_info = await scrape_pet_image(name)
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Pet:** `{name}`\n\n**Exception:**\n```\n{e}\n```"))]); return
-    if not wikia_url:
-        page_url = FANDOM_BASE + quote(name.replace(" ", "_"))
-        await send_v2(interaction, [container(txt("## Image Not Found On Wiki"), sep(), txt(f"**Pet:** `{name}`\n\n No Image Found On The Wiki Page.\n\n**Page Checked:**\n```\n{page_url}\n```\n\n**Debug Info:**\n```\n{debug_info[:600]}\n```"))]); return
-    railway_url = to_railway(wikia_url)
-    short_url   = shorten(railway_url)
-    try:
-        data, sha = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Fetch Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
-    if name in data:
-        existing_url = data[name]
-        wh_url       = webhook_url(interaction)
-        payload = {
-            "flags": FLAGS_V2,
-            "components": [
-                container(
-                    txt("## Pet Already Exists"), sep(),
-                    section(f"**{name}**\n\nAlready In GitHub  Overwrite?\n\n**Current URL:**\n```\n{shorten(existing_url)}\n```\n\n**Fetched URL:**\n```\n{short_url}\n```", existing_url),
-                    action_row(btn_yes(f"overwrite_yes:{name}"), btn_no(f"overwrite_no:{name}")),
-                ),
-            ],
-        }
-        async with aiohttp.ClientSession() as s:
-            async with s.post(wh_url, json=payload) as r:
-                if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
-        bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
-        bot._fetchpet_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
-        return
-    # Show confirm dialog before saving
-    key    = f"{interaction.id}"
-    wh_url2 = webhook_url(interaction)
-    payload2 = {
-        "flags": FLAGS_V2,
-        "components": [container(
-            txt("## Pet Image Found"),
-            sep(),
-            section(f"**{title_case(name)}**", railway_url),
-            sep(),
-            txt(f"**Wiki URL:**\n```\n{short_url}\n```"),
-            sep(),
-            txt("**Save This Pet To GitHub?**"),
-            action_row(
-                btn("Save To GitHub", f"fetchpet_save:{key}", style=2),
-                btn("Discard",        f"fetchpet_discard:{key}", style=2),
-            ),
-        )],
-    }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(wh_url2, json=payload2) as r:
-            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
-    bot._fetchpet_pending = getattr(bot, "_fetchpet_pending", {})
-    bot._fetchpet_pending[key] = {"railway_url": railway_url, "data": data, "sha": sha, "name": name}
-
-# ── /Syncpets ─────────────────────────────────────────────────────────────────
-
-@tree.command(name="syncpets", description="Sync All Pet URLs To Railway Proxy Format.")
-@discord.app_commands.default_permissions(administrator=True)
-async def syncpets(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
-    try:
-        data, sha = await fetch_pets()
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Sync Pets\n\n**Error:**\n```\n{e}\n```"))]); return
-    to_convert = {n: u for n, u in data.items() if not is_railway(u) and extract_wikia_url(u)}
-    to_refetch = {n: u for n, u in data.items() if not is_railway(u) and not extract_wikia_url(u)}
-    needs_sync = {**to_convert, **to_refetch}
-    if not needs_sync:
-        await send_v2(interaction, [container(txt("## Already Fully Synced"), sep(), txt(f"**Total Pets:** {len(data)}\n\nAll URLs Are Already On Railway! Nothing To Sync."))]); return
-    preview_lines = "\n".join(f" `{n}`{' (Re-Fetch)' if n in to_refetch else ''}" for n in sorted(needs_sync.keys())[:10])
-    more_note     = f"\n*...And {len(needs_sync)-10} More*" if len(needs_sync) > 10 else ""
-    wh_url        = webhook_url(interaction)
-    payload = {
-        "flags": FLAGS_V2,
-        "components": [
-            container(
-                txt("## Sync Pets"), sep(),
-                txt(f"**Total Pets:** {len(data)}\n**Found {len(needs_sync)} Pet(s) Not Synced:**\n\n{preview_lines}{more_note}\n\nConvert All?"),
-                action_row(btn_yes("syncpets_yes"), btn_no("syncpets_no")),
-            ),
-        ],
-    }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(wh_url, json=payload) as r:
-            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
-    bot._syncpets_pending = getattr(bot, "_syncpets_pending", {})
-    bot._syncpets_pending["latest"] = {"data": data, "sha": sha, "to_convert": to_convert, "to_refetch": to_refetch}
 
 # ── /Scrapeallbrainrots ───────────────────────────────────────────────────────
 
 @tree.command(name="scrapeallbrainrots", description="Auto-Scrape All Brainrots From Category:Listed_Brainrots And Save To GitHub.")
 @discord.app_commands.default_permissions(administrator=True)
-@discord.app_commands.describe(skip_existing="Skip Brainrots Already In GitHub (Default: True)", dry_run="Preview Only — Do Not Save To GitHub")
+@discord.app_commands.describe(
+    skip_existing="Skip Brainrots Already In GitHub (Default: True)",
+    dry_run="Preview Only — Do Not Save To GitHub",
+)
 async def scrapeallbrainrots(
     interaction: discord.Interaction,
     skip_existing: bool = True,
-    dry_run: bool = False,
+    dry_run:       bool = False,
 ):
     await interaction.response.defer(thinking=True)
 
-    await followup(interaction, [container(
-        txt("## Scraping Category: Listed Brainrots..."),
+    # ── Step 1 / 3 — Load GitHub ─────────────────────────────────────────────
+    await send_v2(interaction, [container(
+        txt("## Scraping Category: Listed Brainrots"),
         sep(),
         txt(
-            f"Fetching All Brainrots From `stealabrainrot.fandom.com/wiki/Category:Listed_Brainrots`\n\n"
-            f"This May Take A Few Minutes — Each Brainrot Will Be Scraped For Its Image.\n\n"
-            f"**Options:** Skip Existing = `{skip_existing}` | Dry Run = `{dry_run}`"
+            f"**Skip Existing:** `{skip_existing}`   **Dry Run:** `{dry_run}`\n\n"
+            f"**Step 1 / 3** — Loading GitHub Data..."
         ),
     )])
-
-    # Load current GitHub data
     try:
         data, sha = await fetch_pets()
     except Exception as e:
         await followup(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
-    # Scrape the category
+    # ── Step 2 / 3 — Scrape Pages ─────────────────────────────────────────────
+    page_log: list[str] = []
+
+    async def on_page(page: int, total: int, method: str, next_url: str | None):
+        if page == -1:
+            line = f"**API Fallback** — {method}"
+        else:
+            nxt  = f"→ Next Starts At `{next_url.split('from=')[1]}`" if next_url and "from=" in next_url else "→ Last Page"
+            line = f"**Page {page}** `{method}` — {total} Found So Far   {nxt}"
+        page_log.append(line)
+        await patch_msg(interaction, [container(
+            txt("## Scanning Category Pages..."),
+            sep(),
+            txt(
+                f"**Step 2 / 3** — Fetching Brainrots From Wiki\n\n"
+                + "\n".join(page_log[-6:])
+            ),
+        )])
+
     try:
-        all_brainrots = await scrape_category_brainrots()
+        all_brainrots = await scrape_category_brainrots(on_page=on_page)
     except Exception as e:
         await followup(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
@@ -1091,12 +717,12 @@ async def scrapeallbrainrots(
         await followup(interaction, [container(
             txt("## No Brainrots Found"),
             sep(),
-            txt("No Brainrots Found On The Category Page.\n\nThe Page Layout May Have Changed Or The Wiki Is Blocking Requests."),
+            txt("No Brainrots Found On The Category Page.\n\nThe Wiki May Be Blocking Requests."),
         )]); return
 
-    # Filter
     to_add   = [(n, u) for n, u in all_brainrots if n not in data]
     existing = [(n, u) for n, u in all_brainrots if n in data]
+    scan_log = "\n".join(page_log)
 
     await followup(interaction, [container(
         txt("## Category Scan Complete"),
@@ -1105,78 +731,68 @@ async def scrapeallbrainrots(
             f"**Total Found On Wiki:** {len(all_brainrots)}\n"
             f"**Already In GitHub:** {len(existing)}\n"
             f"**New (Will Add):** {len(to_add)}\n\n"
-            + (f"Dry Run  Nothing Will Be Saved." if dry_run else
-               f"Saving {len(to_add)} New Brainrots To GitHub..." if to_add else
-               f"All Brainrots Already In GitHub  Nothing New!")
+            f"**Page Log:**\n{scan_log}"
         ),
     )])
 
     if not to_add:
-        await followup(interaction, [container(txt("## Nothing New"), sep(), txt(f"All {len(all_brainrots)} Brainrots From The Category Are Already Saved In GitHub."))])
-        return
+        await followup(interaction, [container(txt("## Nothing New"), sep(), txt(f"All {len(all_brainrots)} Brainrots Are Already In GitHub."))]); return
 
     if dry_run:
-        preview = "\n".join(f" `{n}`{' - Has Image' if u else ' - No Image'}" for n, u in to_add[:30])
-        more    = f"\n*...And {len(to_add)-30} More*" if len(to_add) > 30 else ""
+        preview = "\n".join(f" `{title_case(n)}`{'  — Has Image' if u else '  — No Image'}" for n, u in to_add[:30])
+        more    = f"\n*...And {len(to_add) - 30} More*" if len(to_add) > 30 else ""
         await followup(interaction, [container(
-            txt("## Dry Run  Preview New Brainrots"),
+            txt("## Dry Run — Preview New Brainrots"),
             sep(),
-            txt(f"**{len(to_add)} New Brainrots Will Be Added:**\n\n{preview}{more}"),
-        )])
-        return
+            txt(f"**{len(to_add)} Brainrots Will Be Added:**\n\n{preview}{more}"),
+        )]); return
 
-    # Save to GitHub  track recent adds for live display
+    # ── Step 3 / 3 — Add & Save ──────────────────────────────────────────────
     added_ok:    list[str] = []
     no_image:    list[str] = []
-    recent_done: list[str] = []   # last few added names (for live log)
+    recent_done: list[str] = []
 
-    def _build_progress_msg(i: int, cur_name: str) -> list[dict]:
-        bar      = progress_bar(i, len(to_add))
-        done_log = "\n".join(f" `{n}`" for n in recent_done[-8:]) if recent_done else "*(None Yet...)*"
+    def _progress(i: int, cur: str) -> list[dict]:
+        bar = progress_bar(i, len(to_add))
+        log = "\n".join(f" `{n}`" for n in recent_done[-8:]) or "*(None Yet...)*"
         return [container(
             txt("## Adding Brainrots..."),
             sep(),
             txt(
+                f"**Step 3 / 3** — Saving To GitHub\n\n"
                 f"**Progress:** {bar}\n"
-                f"**Processing:** `{cur_name}`\n\n"
-                f"**Recently Added:**\n{done_log}"
+                f"**Processing:** `{title_case(cur)}`\n\n"
+                f"**Recently Added:**\n{log}"
             ),
         )]
 
     for i, (name, img_url) in enumerate(to_add):
-        # Patch @original in-place — no separate followup to avoid duplicate embeds
-        await patch_msg(interaction, _build_progress_msg(i, name))
+        await patch_msg(interaction, _progress(i, name))
 
-        final_url: str | None = None
-        if img_url:
-            final_url = img_url
-        else:
+        final_url: str | None = img_url or None
+        if not final_url:
             try:
                 wikia_url, _ = await scrape_pet_image(name)
                 if wikia_url:
                     final_url = to_railway(wikia_url)
             except Exception:
-                final_url = None
+                pass
 
         if final_url:
-            data[name]  = final_url
+            data[name] = final_url
             added_ok.append(name)
             recent_done.append(title_case(name))
         else:
             no_image.append(name)
-            # Skip — do NOT add pets with no image to GitHub
 
-        # Per-item notification (channel message)
         await asyncio.sleep(0.15)
 
-    # Final patch to show 100%
     await patch_msg(interaction, [container(
         txt("## Pushing To GitHub..."),
         sep(),
-        txt(f"**Progress:** {progress_bar(len(to_add), len(to_add))}\n**Processed:** {len(to_add)} Brainrots  Saving..."),
+        txt(f"**Progress:** {progress_bar(len(to_add), len(to_add))}\n**Processed:** {len(to_add)} Brainrots — Saving..."),
     )])
 
-    # Push once at the end
     try:
         await push_pets(data, sha, f"[DK] ScrapeAll: Added {len(added_ok)} Brainrots From Category")
         push_ok = True
@@ -1184,23 +800,24 @@ async def scrapeallbrainrots(
         push_ok = False; push_err = str(pe)
 
     if push_ok:
-        all_added_log = "\n".join(f" `{title_case(n)}`" for n in added_ok[:25])
-        more_added    = f"\n*...And {len(added_ok)-25} More*" if len(added_ok) > 25 else ""
-        no_img_txt    = (
-            f"\n\n**{len(no_image)} Without Image:**\n"
+        added_log  = "\n".join(f" `{title_case(n)}`" for n in added_ok[:25])
+        more_added = f"\n*...And {len(added_ok) - 25} More*" if len(added_ok) > 25 else ""
+        no_img_txt = (
+            f"\n\n**No Image Found ({len(no_image)}):**\n"
             + "\n".join(f" `{title_case(n)}`" for n in no_image[:10])
+            + (f"\n*...And {len(no_image) - 10} More*" if len(no_image) > 10 else "")
         ) if no_image else ""
         await followup(interaction, [container(
-            txt("## Scrape All Brainrots  Done!"),
+            txt("## Scrape All Brainrots — Done!"),
             sep(),
             txt(
                 f"**Total On Wiki:** {len(all_brainrots)}\n"
                 f"**Added:** {len(added_ok)}\n"
                 f"**Skipped (Already Exists):** {len(existing)}\n"
                 f"**No Image:** {len(no_image)}\n\n"
-                f"**Brainrots Added:**\n{all_added_log}{more_added}"
+                f"**Brainrots Added:**\n{added_log}{more_added}"
                 f"{no_img_txt}\n\n"
-                f"**GitHub**  Pushed & Sorted A To Z"
+                f"**GitHub** — Pushed & Sorted A To Z"
             ),
         )])
     else:
