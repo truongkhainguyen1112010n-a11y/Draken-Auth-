@@ -697,6 +697,8 @@ async def scrape_category_brainrots(
         if on_page and api_added:
             await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names)", None)
 
+    return all_results
+
 
 # ── /Ping ─────────────────────────────────────────────────────────────────────
 
