@@ -1316,13 +1316,17 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
 
+    # Send initial progress message then patch in-place
+    empty_bar = "░" * 20
+    await followup(interaction, [container(txt(f"**Downloading & Uploading...** `[{empty_bar}]` 0/{len(to_upload)} (0%)\n*Uploading To Server...*"))])
+
     async with aiohttp.ClientSession() as session:
         for i in range(0, len(to_upload), 3):
             batch    = to_upload[i:i+3]
             bar_pct  = i / len(to_upload) if to_upload else 1
             bar_fill = int(bar_pct * 20)
             bar      = f"`[{'█' * bar_fill}{'░' * (20-bar_fill)}]` {i}/{len(to_upload)} ({int(bar_pct*100)}%)"
-            await followup(interaction, [container(txt(f" **Downloading & Uploading...** {bar}\n *Auto-Resizing Images > 256KB*"))])
+            await patch_msg(interaction, [container(txt(f"**Downloading & Uploading...** {bar}\n*Uploading To Server...*"))])
 
             tasks = []
             for name, thumb in batch:
