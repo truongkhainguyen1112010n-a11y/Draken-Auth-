@@ -1720,7 +1720,9 @@ async def on_interaction(interaction: discord.Interaction):
                             try:    retry_after = json.loads(body).get("retry_after", 1.0)
                             except: retry_after = 1.0
                             await asyncio.sleep(float(retry_after) + 0.3); continue
-                        else: deleted_fail.append(f"{ename} (HTTP {r.status})"); break
+                        else:
+                            err_body = await r.text()
+                            deleted_fail.append(f"{ename} (HTTP {r.status}: {err_body[:80]})"); break
                 else: deleted_fail.append(f"{ename} (Rate Limited)")
                 await asyncio.sleep(0.3)
         fail_txt = ""
