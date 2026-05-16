@@ -577,19 +577,27 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
 
                 all_results.append((name, img_url))
 
-            # Find next-page link — Fandom uses ?from=Name format.
-            # findall gets ALL matches; reversed + visited_urls check picks the
-            # "next" link (last in HTML) and skips the "previous" link (first in HTML).
-            all_pg = re.findall(
-                r'href=["\'](/wiki/Category:Listed_Brainrots\?from=[^"\'&]+(?:&amp;[^"\']*)?)["\']',
+            # Find next-page URL — Fandom puts full absolute URL in href.
+            # Prefer <link rel="next"> in <head> (most reliable), fall back to
+            # the pagination button which also uses full https:// URLs.
+            next_url = None
+            rel_next = re.search(
+                r'<link\s+rel=["\']next["\']\s+href=["\']([^"\']+)["\']'
+                r'|<link\s+href=["\']([^"\']+)["\']\s+rel=["\']next["\']',
                 html,
             )
-            next_url = None
-            for candidate in reversed(all_pg):
-                full = BASE_URL + candidate.replace("&amp;", "&")
-                if full not in visited_urls:
-                    next_url = full
-                    break
+            if rel_next:
+                next_url = rel_next.group(1) or rel_next.group(2)
+            else:
+                # Fall back: scan pagination buttons (full https:// URLs)
+                btn_matches = re.findall(
+                    r'href=["\'](https://stealabrainrot\.fandom\.com/wiki/Category:Listed_Brainrots\?from=[^"\']+)["\']',
+                    html,
+                )
+                for candidate in reversed(btn_matches):
+                    if candidate not in visited_urls:
+                        next_url = candidate
+                        break
 
     return all_results
 # ── Image Processing ──────────────────────────────────────────────────────────
