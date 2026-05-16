@@ -390,36 +390,83 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
     slug     = pet_name.replace(" ", "_")
     page_url = f"https://stealabrainrot.fandom.com/wiki/{urllib.parse.quote(slug)}"
     debug    = []
-    timeout  = aiohttp.ClientTimeout(total=40)
+
+    def _extract_image(html: str) -> str | None:
+        """Pull the best image URL out of a wiki page HTML."""
+        m = re.search(r'<meta property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
+        if not m:
+            m = re.search(r'<meta content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
+        if m:
+            img_url = m.group(1)
+            if "wikia.nocookie.net" in img_url:
+                return _clean_wikia_url(img_url)
+        imgs = re.findall(r'https://static\.wikia\.nocookie\.net/[^"\'.\s<>]+\.(?:png|jpg|webp)', html)
+        imgs = [u for u in imgs if not any(x in u.lower() for x in
+                ["icon", "logo", "favicon", "placeholder", "wordmark", "fandom-heart"])]
+        if imgs:
+            return _clean_wikia_url(re.sub(r'/revision/latest.*', '', imgs[0]))
+        return None
+
+    # ── Attempt 1: urllib via thread (bypasses aiohttp TLS fingerprint) ───────
+    loop = asyncio.get_event_loop()
+    def _urllib_get(url: str) -> str | None:
+        import urllib.request as _ur
+        try:
+            req = _ur.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
+            })
+            with _ur.urlopen(req, timeout=25) as r:
+                return r.read().decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    try:
+        body = await loop.run_in_executor(None, _urllib_get, page_url)
+        if body and "<!DOCTYPE" in body[:500]:
+            debug.append("Direct OK")
+            img = _extract_image(body)
+            if img:
+                return img, "\n".join(debug)
+    except Exception:
+        pass
+    debug.append("Direct Failed")
+
+    # ── Attempt 2: aiohttp direct ─────────────────────────────────────────────
+    timeout   = aiohttp.ClientTimeout(total=30)
     connector = aiohttp.TCPConnector(force_close=True)
     async with aiohttp.ClientSession(connector=connector) as session:
         try:
             hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
             async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
                 body = await r.text()
-                debug.append(f"Direct {r.status}")
-                if r.status == 200 and "<!DOCTYPE" in body: html = body
-                else: raise Exception(f"Blocked ({r.status})")
-        except Exception as e:
-            debug.append(f"Fallback  ScraperAPI")
-            async with session.get(
-                "https://api.scraperapi.com",
-                params={"api_key": SCRAPER_API_KEY, "url": page_url, "render": "false"},
-                timeout=timeout,
-            ) as r:
-                body = await r.text()
-                if r.status != 200: return None, "\n".join(debug)
-                html = body
-        m = re.search(r'<meta property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
-        if not m: m = re.search(r'<meta content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
-        if m:
-            img_url = m.group(1)
-            if "wikia.nocookie.net" in img_url:
-                return _clean_wikia_url(img_url), "\n".join(debug)
-        imgs = re.findall(r'https://static\.wikia\.nocookie\.net/[^"\'.\s<>]+\.(?:png|jpg|webp)', html)
-        imgs = [u for u in imgs if not any(x in u.lower() for x in ["icon","logo","favicon","placeholder","wordmark","fandom-heart"])]
-        if imgs: return re.sub(r'/revision/latest.*', '', imgs[0]), "\n".join(debug)
-        debug.append("No Image Found.")
+                if r.status == 200 and "<!DOCTYPE" in body[:500]:
+                    debug.append("aiohttp OK")
+                    img = _extract_image(body)
+                    if img:
+                        return img, "\n".join(debug)
+        except Exception:
+            pass
+        debug.append("aiohttp Failed")
+
+        # ── Attempt 3: ScraperAPI ─────────────────────────────────────────────
+        if SCRAPER_API_KEY:
+            try:
+                async with session.get(
+                    "https://api.scraperapi.com",
+                    params={"api_key": SCRAPER_API_KEY, "url": page_url, "render": "false"},
+                    timeout=timeout,
+                ) as r:
+                    body = await r.text()
+                    if r.status == 200:
+                        debug.append("ScraperAPI OK")
+                        img = _extract_image(body)
+                        if img:
+                            return img, "\n".join(debug)
+            except Exception:
+                pass
+            debug.append("ScraperAPI Failed")
+
+    debug.append("No Image Found")
     return None, "\n".join(debug)
 
 
