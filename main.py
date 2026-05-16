@@ -506,98 +506,104 @@ async def scrape_traits() -> list[tuple[str, str | None]]:
 async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     """
     Scrape ALL brainrot names + images directly from Category:Listed_Brainrots.
-    Images are grabbed from category thumbnails  no need to visit each page.
-    Handles pagination via ?from= query param with visited-URL dedup.
+    Uses <link rel="next"> for pagination. Creates a fresh session per page
+    so Cloudflare does not block subsequent requests (shared session gets rate-limited).
     """
     BASE_URL  = "https://stealabrainrot.fandom.com"
     start_url = BASE_URL + "/wiki/Category:Listed_Brainrots"
     timeout   = aiohttp.ClientTimeout(total=40)
-    hdrs      = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
+    hdrs      = {
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
+        "Accept-Encoding": "gzip, deflate",   # avoid brotli which aiohttp may not decode
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
 
-    LI_PAT        = re.compile('<li class="category-page__member">(.*?)</li>', re.DOTALL)
-    NAME_PAT      = re.compile('class="category-page__member-link"[^>]*>([^<]+)<')
-    DATA_SRC_PAT  = re.compile(r'\bdata-src=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
-    SRC_PAT       = re.compile(r'\bsrc=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
-    # Fandom uses ?pagefrom= OR ?from= for next-page links — match both
-    NEXT_PAT      = re.compile(r'href=["\'](/wiki/Category:Listed_Brainrots[^"\']*(?:pagefrom|from)=[^"\']+)["\']')
+    LI_PAT       = re.compile('<li class="category-page__member">(.*?)</li>', re.DOTALL)
+    NAME_PAT     = re.compile('class="category-page__member-link"[^>]*>([^<]+)<')
+    DATA_SRC_PAT = re.compile(r'\bdata-src=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
+    SRC_PAT      = re.compile(r'\bsrc=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
 
     all_results:  list[tuple[str, str | None]] = []
     seen_names:   set[str] = set()
     visited_urls: set[str] = set()
     next_url: str | None   = start_url
 
-    connector = aiohttp.TCPConnector(force_close=True)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        while next_url and next_url not in visited_urls:
-            visited_urls.add(next_url)
-            html: str | None = None
-
+    async def _fetch_page(url: str) -> str | None:
+        """Fetch one category page — fresh session per call to beat Cloudflare."""
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
             try:
-                async with session.get(next_url, headers=hdrs, timeout=timeout) as r:
-                    if r.status == 200 and "<!DOCTYPE" in (body := await r.text()):
-                        html = body
-                    else:
-                        raise Exception(f"HTTP {r.status}")
+                async with session.get(url, headers=hdrs, timeout=timeout) as r:
+                    body = await r.text()
+                    if r.status == 200 and ("<!DOCTYPE" in body[:500] or "<!doctype" in body[:500]):
+                        return body
+                    raise Exception(f"HTTP {r.status}")
             except Exception:
+                if not SCRAPER_API_KEY:
+                    return None
                 try:
                     async with session.get(
                         "https://api.scraperapi.com",
-                        params={"api_key": SCRAPER_API_KEY, "url": next_url, "render": "false"},
+                        params={"api_key": SCRAPER_API_KEY, "url": url, "render": "false"},
                         timeout=timeout,
                     ) as r:
                         if r.status == 200:
-                            html = await r.text()
+                            return await r.text()
                 except Exception:
                     pass
+        return None
 
-            if not html:
-                break
+    while next_url and next_url not in visited_urls:
+        visited_urls.add(next_url)
 
-            for li in LI_PAT.finditer(html):
-                block = li.group(1)
+        html = await _fetch_page(next_url)
+        if not html:
+            break
 
-                nm = NAME_PAT.search(block)
-                name = nm.group(1).strip() if nm else None
-                if not name:
-                    t = re.search('title="([^"]+)"', block)
-                    name = t.group(1) if t else None
-                if not name or name in seen_names:
-                    continue
-                seen_names.add(name)
+        for li in LI_PAT.finditer(html):
+            block = li.group(1)
 
-                # Prefer data-src (lazy-load full thumbnail) over src (tiny placeholder)
-                # Both are before <noscript> on Fandom category pages
-                ns_idx = block.find("<noscript>")
-                look   = block[:ns_idx] if ns_idx > 0 else block
-                im     = DATA_SRC_PAT.search(look) or SRC_PAT.search(look)
-                if im:
-                    img_url = to_railway(_clean_wikia_url(im.group(1)))
-                else:
-                    img_url = None
+            nm   = NAME_PAT.search(block)
+            name = nm.group(1).strip() if nm else None
+            if not name:
+                t    = re.search('title="([^"]+)"', block)
+                name = t.group(1) if t else None
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
 
-                all_results.append((name, img_url))
+            # Prefer data-src (lazy-load full thumbnail) over src (tiny placeholder)
+            ns_idx = block.find("<noscript>")
+            look   = block[:ns_idx] if ns_idx > 0 else block
+            im     = DATA_SRC_PAT.search(look) or SRC_PAT.search(look)
+            img_url = to_railway(_clean_wikia_url(im.group(1))) if im else None
 
-            # Find next-page URL — Fandom puts full absolute URL in href.
-            # Prefer <link rel="next"> in <head> (most reliable), fall back to
-            # the pagination button which also uses full https:// URLs.
-            next_url = None
-            rel_next = re.search(
-                r'<link\s+rel=["\']next["\']\s+href=["\']([^"\']+)["\']'
-                r'|<link\s+href=["\']([^"\']+)["\']\s+rel=["\']next["\']',
+            all_results.append((name, img_url))
+
+        # Find next page via <link rel="next"> (most reliable Fandom pagination signal)
+        next_url = None
+        rel_next = re.search(
+            r'<link\s+rel=["\']next["\']\s+href=["\']([^"\']+)["\']'
+            r'|<link\s+href=["\']([^"\']+)["\']\s+rel=["\']next["\']',
+            html,
+        )
+        if rel_next:
+            next_url = rel_next.group(1) or rel_next.group(2)
+        else:
+            # Fallback: scan full-URL pagination buttons
+            btn_matches = re.findall(
+                r'href=["\'](https://stealabrainrot\.fandom\.com/wiki/Category:Listed_Brainrots\?from=[^"\']+)["\']',
                 html,
             )
-            if rel_next:
-                next_url = rel_next.group(1) or rel_next.group(2)
-            else:
-                # Fall back: scan pagination buttons (full https:// URLs)
-                btn_matches = re.findall(
-                    r'href=["\'](https://stealabrainrot\.fandom\.com/wiki/Category:Listed_Brainrots\?from=[^"\']+)["\']',
-                    html,
-                )
-                for candidate in reversed(btn_matches):
-                    if candidate not in visited_urls:
-                        next_url = candidate
-                        break
+            for candidate in reversed(btn_matches):
+                if candidate not in visited_urls:
+                    next_url = candidate
+                    break
+
+        if next_url:
+            await asyncio.sleep(0.8)   # polite delay between pages
+
+
 
     return all_results
 # ── Image Processing ──────────────────────────────────────────────────────────
