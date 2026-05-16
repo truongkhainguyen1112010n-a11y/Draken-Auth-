@@ -531,16 +531,44 @@ async def scrape_category_brainrots(
     visited_urls: set[str] = set()
 
     async def _fetch_html(url: str) -> tuple[str | None, str]:
-        """Return (html, method). Method = 'Direct' | 'ScraperAPI' | 'Failed'."""
+        """Fetch one category page.
+        Priority: urllib (bypasses aiohttp TLS fingerprint detection) →
+                  aiohttp direct → ScraperAPI → Failed."""
+        loop = asyncio.get_event_loop()
+
+        # ── Attempt 1: urllib via thread (same as our working test) ──────────
+        def _urllib_fetch(u: str) -> str | None:
+            import urllib.request as _ur
+            try:
+                req = _ur.Request(u, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                })
+                with _ur.urlopen(req, timeout=30) as r:
+                    body = r.read().decode("utf-8", errors="replace")
+                    return body if "category-page__member" in body else None
+            except Exception:
+                return None
+
+        try:
+            body = await loop.run_in_executor(None, _urllib_fetch, url)
+            if body:
+                return body, "Direct"
+        except Exception:
+            pass
+
+        # ── Attempt 2: aiohttp direct ─────────────────────────────────────────
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
             try:
                 async with session.get(url, headers=hdrs, timeout=timeout) as r:
                     body = await r.text()
                     if r.status == 200 and "category-page__member" in body:
-                        return body, "Direct"
+                        return body, "aiohttp"
             except Exception:
                 pass
+
+            # ── Attempt 3: ScraperAPI ─────────────────────────────────────────
             if SCRAPER_API_KEY:
                 try:
                     async with session.get(
@@ -553,6 +581,7 @@ async def scrape_category_brainrots(
                             return body, "ScraperAPI"
                 except Exception:
                     pass
+
         return None, "Failed"
 
     async def _api_get_all_names() -> list[str]:
