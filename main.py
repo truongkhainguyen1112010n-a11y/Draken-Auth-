@@ -624,17 +624,26 @@ async def scrape_category_brainrots(
     # ── Main Pagination Loop ──────────────────────────────────────────────────
 
     next_url: str | None = start_url
-    page = 0
+    page     = 0
+    got_stuck = False   # True if a page returned 0 new items (cached/wrong response)
 
     while next_url and next_url not in visited_urls:
         visited_urls.add(next_url)
         page += 1
+        count_before = len(all_results)
 
         html, method = await _fetch_html(next_url)
         if html:
             items    = _parse_items(html)
             all_results.extend(items)
             next_url = _find_next(html)
+
+            # Detect stuck: page 2+ returned 0 new items → ScraperAPI/CDN cached page 1
+            if page > 1 and len(all_results) == count_before:
+                got_stuck = True
+                if on_page:
+                    await on_page(page, len(all_results), f"{method} — Stuck (0 New Items, Cached Response)", None)
+                break
         else:
             next_url = None
 
@@ -645,8 +654,10 @@ async def scrape_category_brainrots(
             await asyncio.sleep(0.8)
 
     # ── MediaWiki API Fallback ────────────────────────────────────────────────
-    # Triggered when Cloudflare blocked HTML pages 2+ (only 1 page visited).
-    if page <= 1:
+    # Triggered when:
+    #   • Only page 1 was fetched (Cloudflare blocked page 2+), OR
+    #   • ScraperAPI returned a cached copy of page 1 for page 2 (got_stuck)
+    if page <= 1 or got_stuck:
         api_names = await _api_get_all_names()
         api_added = 0
         for name in api_names:
@@ -655,7 +666,7 @@ async def scrape_category_brainrots(
                 all_results.append((name, None))
                 api_added += 1
         if on_page and api_added:
-            await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names)", None)
+            await on_page(-1, len(all_results), f"API Fallback — Added {api_added} Remaining Names", None)
 
     return all_results
 
