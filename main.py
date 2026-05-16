@@ -14,6 +14,8 @@ from PIL import Image
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+# ── Bot & GitHub ──────────────────────────────────────────────────────────────
+
 BOT_TOKEN             = os.environ.get("BOT_TOKEN",             "")
 GITHUB_TOKEN          = os.environ.get("GITHUB_TOKEN",          "")
 GITHUB_USER           = os.environ.get("GITHUB_USER",           "truongkhainguyen1112010n-a11y")
@@ -24,14 +26,25 @@ GITHUB_JSON_FILE      = os.environ.get("GITHUB_JSON_FILE",      "thumbnails1.jso
 GITHUB_TRAITS_FILE    = os.environ.get("GITHUB_TRAITS_FILE",    "traits.lua")
 GITHUB_MUTATIONS_FILE = os.environ.get("GITHUB_MUTATIONS_FILE", "mutations.lua")
 SCRAPER_API_KEY       = os.environ.get("SCRAPER_API_KEY",       "")
+
+# ── Proxy & URLs ──────────────────────────────────────────────────────────────
+
 RAILWAY_PROXY         = os.environ.get("RAILWAY_PROXY",         "https://proxy-production-22ad.up.railway.app/img")
+# ── API Keys & Tokens ─────────────────────────────────────────────────────────
+
 FANDOM_BASE           = "https://stealabrainrot.fandom.com/wiki/"
+
+# ── Discord & Bot Settings ────────────────────────────────────────────────────
+
 FLAGS_V2              = 32768
 OWNER_ID              = 1498384419805986886
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def title_case(s: str) -> str:
     """Capitalize first letter of every word."""
     return ' '.join(w[0].upper() + w[1:] if w else w for w in s.split(' '))
+
 
 def max_emoji_slots(premium_tier: int) -> int:
     """Return max emoji slots based on server boost tier."""
@@ -68,6 +81,8 @@ tree.interaction_check = global_owner_check
 
 # ── UI Components ─────────────────────────────────────────────────────────────
 
+# ── Text & Separator ──────────────────────────────────────────────────────────
+
 def txt(content: str) -> dict:
     return {"type": 10, "content": content}
 
@@ -76,6 +91,9 @@ def sep() -> dict:
 
 def sep_sm() -> dict:
     return {"type": 14, "divider": False, "spacing": 1}
+
+
+# ── Section Component ─────────────────────────────────────────────────────────
 
 def section(content: str, thumbnail_url: str) -> dict:
     return {
@@ -88,11 +106,17 @@ def section(content: str, thumbnail_url: str) -> dict:
         },
     }
 
+
+# ── Container & Action Row ────────────────────────────────────────────────────
+
 def container(*items: dict) -> dict:
     return {"type": 17, "components": list(items)}
 
 def action_row(*buttons: dict) -> dict:
     return {"type": 1, "components": list(buttons)}
+
+
+# ── Button Helpers ────────────────────────────────────────────────────────────
 
 def btn(label: str, custom_id: str, style: int = 2) -> dict:
     return {"type": 2, "style": style, "label": label, "custom_id": custom_id}
@@ -102,6 +126,9 @@ def btn_yes(custom_id: str) -> dict:
 
 def btn_no(custom_id: str) -> dict:
     return btn("No", custom_id, style=2)
+
+
+# ── Progress Bar ──────────────────────────────────────────────────────────────
 
 def progress_bar(done: int, total: int, width: int = 20) -> str:
     pct    = done / total if total else 1
@@ -118,8 +145,13 @@ def progress_bar(done: int, total: int, width: int = 20) -> str:
 
 # ── Discord Helpers ───────────────────────────────────────────────────────────
 
+# ── Webhook URL Builder ───────────────────────────────────────────────────────
+
 def webhook_url(interaction: discord.Interaction) -> str:
     return f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
+
+
+# ── Send & Followup ───────────────────────────────────────────────────────────
 
 async def send_v2(interaction: discord.Interaction, components: list[dict]):
     url = webhook_url(interaction)
@@ -127,6 +159,7 @@ async def send_v2(interaction: discord.Interaction, components: list[dict]):
         async with s.post(url, json={"flags": FLAGS_V2, "components": components}) as r:
             if r.status not in (200, 204):
                 raise Exception(f"Discord {r.status}: {(await r.text())[:200]}")
+
 
 async def followup(interaction: discord.Interaction, components: list[dict]):
     url     = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
@@ -145,6 +178,9 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
                 raise Exception(f"Discord {r.status}: {body[:200]}")
     raise Exception("Rate Limited  Max Retries Exceeded")
 
+
+# ── Patch Message ─────────────────────────────────────────────────────────────
+
 async def patch_msg(interaction: discord.Interaction, components: list[dict]):
     url = f"{webhook_url(interaction)}/messages/@original"
     async with aiohttp.ClientSession() as s:
@@ -152,11 +188,16 @@ async def patch_msg(interaction: discord.Interaction, components: list[dict]):
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
 
+# ── URL Check Functions ───────────────────────────────────────────────────────
+
 def is_railway(url: str) -> bool:
     return "up.railway.app" in url or "railway.app" in url
 
 def is_cdn(url: str) -> bool:
     return "media.discordapp.net/attachments" in url or "cdn.discordapp.com/attachments" in url
+
+
+# ── Wikia URL Cleaner ─────────────────────────────────────────────────────────
 
 def _clean_wikia_url(url: str) -> str:
     """Normalize Fandom/wikia URL to a clean static.wikia.nocookie.net URL."""
@@ -165,11 +206,15 @@ def _clean_wikia_url(url: str) -> str:
     # Keep ?cb=... so Discord CDN caches correctly
     return url
 
+
+# ── Proxy Wrapper ─────────────────────────────────────────────────────────────
+
 def via_proxy(url: str) -> str:
     """Proxy any image URL through Railway with auto resize."""
     if not url: return url
     encoded = quote(url, safe='')
     return f"{RAILWAY_PROXY}?url={encoded}"
+
 
 def extract_wikia_url(url: str) -> str | None:
     if is_railway(url) or is_cdn(url):
@@ -187,6 +232,7 @@ def extract_wikia_url(url: str) -> str | None:
     if m: return _clean_wikia_url(m.group(1))
     return None
 
+
 def to_railway(url: str) -> str:
     """Normalize and proxy the URL through Railway for proper thumbnail display."""
     if is_cdn(url): return url          # Discord CDN — keep as-is
@@ -201,11 +247,16 @@ def to_railway(url: str) -> str:
     target = wikia if wikia else url
     return via_proxy(target)
 
+
+# ── String Utils ──────────────────────────────────────────────────────────────
+
 def shorten(url: str, limit: int = 400) -> str:
     if len(url) > limit: url = url[:limit] + "..."
     return "\n".join(url[i:i+90] for i in range(0, len(url), 90))
 
 # ── GitHub Helpers ────────────────────────────────────────────────────────────
+
+# ── Lua Parser ────────────────────────────────────────────────────────────────
 
 def parse_lua(text: str) -> dict:
     data = {}
@@ -219,6 +270,7 @@ def parse_lua(text: str) -> dict:
             data[k] = v
     return data
 
+
 def to_lua(data: dict) -> str:
     max_len = max((len(k) for k in data), default=0)
     lines   = []
@@ -228,6 +280,9 @@ def to_lua(data: dict) -> str:
         pad = " " * (max_len - len(k) + 1)
         lines.append('    ["' + ek + '"]' + pad + '= "' + ev + '",')
     return "\n".join(lines)
+
+
+# ── GitHub API ────────────────────────────────────────────────────────────────
 
 async def gh_fetch(filename: str) -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
@@ -241,6 +296,7 @@ async def gh_fetch(filename: str) -> tuple[dict, str]:
             try:    data = json.loads(content)
             except: data = parse_lua(content)
             return data, result["sha"]
+
 
 async def gh_push(filename: str, data: dict, sha: str, msg: str):
     sorted_data = dict(sorted(data.items(), key=lambda x: x[0].lower()))
@@ -263,6 +319,8 @@ async def gh_push(filename: str, data: dict, sha: str, msg: str):
 
 # ── Pet GitHub ────────────────────────────────────────────────────────────────
 
+# ── Fetch Pets ────────────────────────────────────────────────────────────────
+
 async def fetch_pets() -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE}?ref={GITHUB_BRANCH}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
@@ -276,6 +334,7 @@ async def fetch_pets() -> tuple[dict, str]:
             except: data = parse_lua(content)
             return data, result["sha"]
 
+
 async def _gh_latest_sha(filename: str, headers: dict) -> str:
     """Always fetch the latest SHA for a file to avoid 409 conflicts."""
     url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
@@ -285,11 +344,15 @@ async def _gh_latest_sha(filename: str, headers: dict) -> str:
                 return (await r.json()).get("sha", "")
             return ""
 
+
 def _encode_for_file(filename: str, data: dict) -> str:
     """Encode data as JSON for .json files, Lua table for .lua files."""
     if filename.endswith(".json"):
         return base64.b64encode(json.dumps(data, ensure_ascii=False, indent=2).encode()).decode()
     return base64.b64encode(to_lua(data).encode()).decode()
+
+
+# ── Push Pets ─────────────────────────────────────────────────────────────────
 
 async def push_pets(data: dict, sha: str, msg: str):
     sorted_data = dict(sorted(data.items(), key=lambda x: x[0].lower()))
@@ -316,15 +379,17 @@ async def push_pets(data: dict, sha: str, msg: str):
     await asyncio.sleep(0.5)   # Small gap so GitHub registers first push
     await _push_file(GITHUB_JSON_FILE)
 
-
 # ── Wiki Scrapers ─────────────────────────────────────────────────────────────
+
+# ── Pet Image Scraper ─────────────────────────────────────────────────────────
 
 async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
     slug     = pet_name.replace(" ", "_")
     page_url = f"https://stealabrainrot.fandom.com/wiki/{urllib.parse.quote(slug)}"
     debug    = []
     timeout  = aiohttp.ClientTimeout(total=40)
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(force_close=True)
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
             hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
             async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
@@ -354,6 +419,9 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
         debug.append("No Image Found.")
     return None, "\n".join(debug)
 
+
+# ── Wiki Table Helpers ────────────────────────────────────────────────────────
+
 def _best_wikia_img(cell_html: str) -> str | None:
     for attr in ('data-src', 'data-image-key', 'src'):
         for m in re.finditer(rf'{attr}=["\'"]([^"\'"]+)["\'"]', cell_html, re.IGNORECASE):
@@ -362,10 +430,12 @@ def _best_wikia_img(cell_html: str) -> str | None:
                 return to_railway(_clean_wikia_url(url))
     return None
 
+
 async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
     timeout = aiohttp.ClientTimeout(total=40)
     hdrs    = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(force_close=True)
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
             async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
                 if r.status == 200 and "<!DOCTYPE" in (body := await r.text()): html = body
@@ -420,11 +490,15 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
 
     return entries
 
+
+# ── Scrape Mutations / Traits / Category ──────────────────────────────────────
+
 async def scrape_mutations() -> list[tuple[str, str | None]]:
     return await _scrape_wiki_table("https://stealabrainrot.fandom.com/wiki/Mutations")
 
 async def scrape_traits() -> list[tuple[str, str | None]]:
     return await _scrape_wiki_table("https://stealabrainrot.fandom.com/wiki/Traits")
+
 
 async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     """
@@ -447,7 +521,8 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     visited_urls: set[str] = set()
     next_url: str | None   = start_url
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(force_close=True)
+    async with aiohttp.ClientSession(connector=connector) as session:
         while next_url and next_url not in visited_urls:
             visited_urls.add(next_url)
             html: str | None = None
@@ -505,6 +580,8 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     return all_results
 # ── Image Processing ──────────────────────────────────────────────────────────
 
+# ── Download & Resize ─────────────────────────────────────────────────────────
+
 async def download_and_resize(url: str, session: aiohttp.ClientSession) -> bytes | None:
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
@@ -520,11 +597,15 @@ async def download_and_resize(url: str, session: aiohttp.ClientSession) -> bytes
         return data if len(data) <= 256_000 else None
     except Exception: return None
 
+
+# ── Emoji Utils ───────────────────────────────────────────────────────────────
+
 def sanitize_name(name: str) -> str:
     clean = re.sub(r'[^a-zA-Z0-9_]', '_', name)
     clean = re.sub(r'_+', '_', clean).strip('_')
     if len(clean) < 2: clean = clean + '_e'
     return clean[:32]
+
 
 async def upload_emoji(guild_id: int, bot_token: str, name: str, image_bytes: bytes, session: aiohttp.ClientSession) -> tuple[dict | None, str]:
     if image_bytes[:8] == b'\x89PNG\r\n\x1a\n': mime = "image/png"
@@ -559,6 +640,7 @@ async def upload_emoji(guild_id: int, bot_token: str, name: str, image_bytes: by
             return None, err_msg
     return None, "Rate Limited  Max Retries"
 
+
 def parse_emoji_input(raw: str) -> dict[str, str]:
     result = {}
     for line in raw.splitlines():
@@ -587,8 +669,13 @@ async def ping(interaction: discord.Interaction):
     ws_ms      = round(bot.latency * 1000)
     status     = "Excellent" if ws_ms < 80 else "Normal" if ws_ms < 150 else "Slow"
     await send_v2(interaction, [container(
-        txt("## Pong"), sep(),
-        txt(f"**Websocket Latency:** `{ws_ms}ms`\n**Response Time:** `{latency_ms}ms`\n**Status:** {status}"),
+        txt("## Pong"),
+        sep(),
+        txt(f"**Websocket Latency:** `{ws_ms}ms`"),
+        sep_sm(),
+        txt(f"**Response Time:** `{latency_ms}ms`"),
+        sep_sm(),
+        txt(f"**Status:** {status}"),
     )])
 
 # ── /Addpet ───────────────────────────────────────────────────────────────────
@@ -607,9 +694,15 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
     if name in data:
         exist = data[name]
         await send_v2(interaction, [container(
-            txt("## Pet Already Exists"), sep(),
-            section(f"**{name}**\n\n Already In GitHub!\n\n**Current URL**\n```\n{shorten(exist, 240)}\n```", exist),
-            sep(), txt(f"Use `/updatepet` To Change The URL.\n**New URL You Tried:**\n```\n{shorten(converted, 240)}\n```"),
+            txt("## Pet Already Exists"),
+            sep(),
+            section(f"**{name}**", exist),
+            sep(),
+            txt(f"**Current URL:**\n```\n{shorten(exist, 240)}\n```"),
+            sep(),
+            txt(f"**New URL You Tried:**\n```\n{shorten(converted, 240)}\n```"),
+            sep_sm(),
+            txt("Use `/updatepet` To Change The URL."),
         )])
         return
     try:
@@ -620,7 +713,13 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
         ok = False; err = str(e)
     if ok:
         label_text = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
-        await send_v2(interaction, [container(txt("## Pet Added Successfully"), sep(), section(f"**{title_case(name)}**\n\n{label_text}\n```\n{shorten(converted)}\n```", converted), sep(), txt("**GitHub**  Pushed & Sorted A To Z"))])
+        await send_v2(interaction, [container(txt("## Pet Added Successfully"),
+        sep(),
+        section(f"**{title_case(name)}**\n\n{label_text}", converted),
+        sep(),
+        txt(f"**URL:**\n```\n{shorten(converted)}\n```"),
+        sep(),
+        txt("**GitHub** — Pushed & Sorted A To Z"))])
     else:
         await send_v2(interaction, [container(txt("## Failed To Add Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub**  Push Failed\n```\n{err[:200]}\n```"))])
 
@@ -650,7 +749,15 @@ async def updatepet(interaction: discord.Interaction, name: str, url: str):
     except Exception as e:
         ok = False; err = str(e)
     if ok:
-        await send_v2(interaction, [container(txt("## Pet Updated Successfully"), sep(), section(f"**{name}**\n\n{label}\n```\n{shorten(converted, 240)}\n```", converted), sep(), txt(f"**Previous URL:**\n```\n{shorten(old_url, 200)}\n```"), sep(), txt("**GitHub**  Pushed & Sorted A To Z"))])
+        await send_v2(interaction, [container(txt("## Pet Updated Successfully"),
+        sep(),
+        section(f"**{name}**\n\n{label}", converted),
+        sep(),
+        txt(f"**New URL:**\n```\n{shorten(converted, 240)}\n```"),
+        sep(),
+        txt(f"**Previous URL:**\n```\n{shorten(old_url, 200)}\n```"),
+        sep(),
+        txt("**GitHub** — Pushed & Sorted A To Z"))])
     else:
         await send_v2(interaction, [container(txt("## Failed To Update Pet"), sep(), txt(f"**Pet:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
 
@@ -676,8 +783,13 @@ async def deletepet(interaction: discord.Interaction, name: str):
         "flags": FLAGS_V2,
         "components": [
             container(
-                txt("## Confirm Delete Pet"), sep(),
-                section(f"**{name}**\n\n Are You Sure You Want To Delete This Pet?\n\n**URL:**\n```\n{shorten(deleted_url, 200)}\n```", deleted_url),
+                txt("## Confirm Delete Pet"),
+                sep(),
+                section(f"**{name}**", deleted_url),
+                sep(),
+                txt(f"**URL:**\n```\n{shorten(deleted_url, 200)}\n```"),
+                sep_sm(),
+                txt("Are You Sure You Want To Delete This Pet?"),
                 action_row(btn_yes(f"delpet_yes:{name}"), btn_no("delpet_no")),
             ),
         ],
@@ -704,7 +816,11 @@ async def getpet(interaction: discord.Interaction, name: str):
         if suggestions: items += [sep(), txt("** Did You Mean:**\n" + "\n".join(f" `{s}`" for s in suggestions[:5]))]
         await send_v2(interaction, [container(*items)]); return
     url_val = data[name]
-    await send_v2(interaction, [container(txt("## Pet Thumbnail"), sep(), section(f"**{name}**\n\n**URL:**\n```\n{shorten(url_val)}\n```", url_val))])
+    await send_v2(interaction, [container(txt("## Pet Thumbnail"),
+    sep(),
+    section(f"**{name}**", url_val),
+    sep(),
+    txt(f"**URL:**\n```\n{shorten(url_val)}\n```"))])
 
 # ── /Searchpet ────────────────────────────────────────────────────────────────
 
@@ -721,7 +837,13 @@ async def searchpet(interaction: discord.Interaction, query: str):
         await send_v2(interaction, [container(txt(f"## No Results Found\n **Query:** `{query}`"))]); return
     top     = matches[0]
     top_url = data[top]
-    items   = [txt(f"## Search Results For `{query}`"), sep(), section(f"**Top Match:** `{top}`\n\n**URL:**\n```\n{shorten(top_url, 240)}\n```", top_url)]
+    items   = [
+        txt(f"## Search Results For `{query}`"),
+        sep(),
+        section(f"**Top Match:** `{top}`", top_url),
+        sep(),
+        txt(f"**URL:**\n```\n{shorten(top_url, 240)}\n```"),
+    ]
     if len(matches) > 1:
         items += [sep(), txt(f"**Other Matches ({len(matches)-1}):**\n" + "\n".join(f" `{m}`" for m in matches[1:26]))]
     items += [sep(), txt(f"**Total Matches:** {len(matches)} / {len(data)} Pets")]
@@ -742,9 +864,11 @@ async def listpets(interaction: discord.Interaction):
     other_count   = len(data) - railway_count - cdn_count
     pet_names     = sorted(data.keys(), key=lambda x: x.lower())
     await followup(interaction, [container(
-        txt("## Full Pet List"), sep(),
-        txt(f"**Total Pets:** {len(data)}    **Railway:** {railway_count}    **CDN:** {cdn_count}    **Other:** {other_count}"),
-        sep_sm(), txt("**All Pets (A To Z)  Loading Thumbnails Below...**"),
+        txt("## Full Pet List"),
+        sep(),
+        txt(f"**Total Pets:** {len(data)}  •  **Wiki:** {railway_count}  •  **CDN:** {cdn_count}  •  **Other:** {other_count}"),
+        sep(),
+        txt("**All Pets (A To Z) — Loading Thumbnails Below...**"),
     )])
     for i in range(0, len(pet_names), 5):
         chunk = pet_names[i:i+5]
@@ -802,7 +926,9 @@ async def fetchpet(interaction: discord.Interaction, name: str):
         "components": [container(
             txt("## Pet Image Found"),
             sep(),
-            section(f"**{title_case(name)}**\n\n**Wiki URL:**\n```\n{short_url}\n```", railway_url),
+            section(f"**{title_case(name)}**", railway_url),
+            sep(),
+            txt(f"**Wiki URL:**\n```\n{short_url}\n```"),
             sep(),
             txt("**Save This Pet To GitHub?**"),
             action_row(
@@ -1024,7 +1150,7 @@ async def listmutations(interaction: discord.Interaction):
     await followup(interaction, [container(txt("##  Mutations List"), sep(), txt(f"**Total:** {len(mutations)}    **With Thumbnail:** {with_thumb}    **No Image:** {len(mutations)-with_thumb}\n\n **Loading All Below...**"))])
     for i in range(0, len(mutations), 5):
         chunk = mutations[i:i+5]
-        items = [txt(f"**Mutations ({i+1}{i+len(chunk)}):**")]
+        items = []
         for j, (name, thumb) in enumerate(chunk):
             if j > 0: items.append(sep())
             items.append(section(f"**{name}**", thumb) if thumb else txt(f"**{name}**  *(No Image Found)*"))
@@ -1050,7 +1176,7 @@ async def listtraits(interaction: discord.Interaction):
     await followup(interaction, [container(txt("## Traits List"), sep(), txt(f"**Total:** {len(traits)}    **With Thumbnail:** {with_thumb}    **No Image:** {len(traits)-with_thumb}\n\n **Loading All Below...**"))])
     for i in range(0, len(traits), 5):
         chunk = traits[i:i+5]
-        items = [txt(f"**Traits ({i+1}{i+len(chunk)}):**")]
+        items = []
         for j, (name, thumb) in enumerate(chunk):
             if j > 0: items.append(sep())
             items.append(section(f"**{name}**", thumb) if thumb else txt(f"**{name}**  *(No Image Found)*"))
@@ -1436,7 +1562,9 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                 + (f"\n\n**Preview:**\n{ok_preview}" if ok_preview else "")
             ),
             sep(),
-            txt("**Save These Emojis To GitHub?**\n`traits.lua` + `mutations.lua` Will Be Updated."),
+            txt("**Save These Emojis To GitHub?**"),
+            sep_sm(),
+            txt("`traits.lua` + `mutations.lua` Will Be Updated."),
             action_row(
                 btn("Save To GitHub", f"autoemoji_save:{akey}", style=2),
                 btn("Discard", f"autoemoji_discard:{akey}", style=2),
@@ -1492,7 +1620,11 @@ async def savemutations(interaction: discord.Interaction):
         preview  = "\n".join('["' + k + '"] = "' + v + '",' for k, v in list(data.items())[:8] if v)
         await followup(interaction, [container(
             txt("## Mutations Saved To GitHub"), sep(),
-            txt(f"**Total Mutations:** {len(data)}\n**With Emoji:** {mapped}    **Missing:** {unmapped}\n\n**GitHub File:** `{GITHUB_MUTATIONS_FILE}`\n**Format:** `[\"Name\"] = \"<:Name:id>\",`\n\n**Preview:**\n```lua\n{preview}\n```"),
+            txt(f"**Total Mutations:** {len(data)}  •  **With Emoji:** {mapped}  •  **Missing:** {unmapped}"),
+            sep(),
+            txt(f"**GitHub File:** `{GITHUB_MUTATIONS_FILE}`\n**Format:** `[\"Name\"] = \"<:Name:id>\",`"),
+            sep(),
+            txt(f"**Preview:**\n```lua\n{preview}\n```"),
         )])
     else:
         await followup(interaction, [container(txt("## Failed To Save Mutations"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
@@ -1535,7 +1667,11 @@ async def savetraits(interaction: discord.Interaction):
         preview  = "\n".join('["' + k + '"] = "' + v + '",' for k, v in list(data.items())[:8] if v)
         await followup(interaction, [container(
             txt("## Traits Saved To GitHub"), sep(),
-            txt(f"**Total Traits:** {len(data)}\n**With Emoji:** {mapped}    **Missing:** {unmapped}\n\n**GitHub File:** `{GITHUB_TRAITS_FILE}`\n**Format:** `[\"Name\"] = \"<:Name:id>\",`\n\n**Preview:**\n```lua\n{preview}\n```"),
+            txt(f"**Total Traits:** {len(data)}  •  **With Emoji:** {mapped}  •  **Missing:** {unmapped}"),
+            sep(),
+            txt(f"**GitHub File:** `{GITHUB_TRAITS_FILE}`\n**Format:** `[\"Name\"] = \"<:Name:id>\",`"),
+            sep(),
+            txt(f"**Preview:**\n```lua\n{preview}\n```"),
         )])
     else:
         await followup(interaction, [container(txt("## Failed To Save Traits"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
@@ -1558,13 +1694,13 @@ async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"
         "flags": FLAGS_V2,
         "components": [
             container(
-                txt("## Confirm Delete Server Emojis"), sep(),
-                txt(
-                    f"**Mode:** `{'All Emojis In Server' if mode == 'all' else 'Only Bot-Uploaded Emojis'}`\n\n"
-                    f"**This Will Permanently Delete Emojis From `{interaction.guild.name}`!**\n"
-                    f"This Action **Cannot Be Undone**.\n\n"
-                    f"Are You Sure You Want To Continue?"
-                ),
+                txt("## Confirm Delete Server Emojis"),
+                sep(),
+                txt(f"**Mode:** `{'All Emojis In Server' if mode == 'all' else 'Only Bot-Uploaded Emojis'}`"),
+                sep(),
+                txt(f"**This Will Permanently Delete Emojis From `{interaction.guild.name}`!**\nThis Action **Cannot Be Undone**."),
+                sep_sm(),
+                txt("Are You Sure You Want To Continue?"),
                 action_row(btn_yes(f"delserver_yes:{mode}"), btn_no("delserver_no")),
             ),
         ],
@@ -1771,7 +1907,7 @@ async def on_interaction(interaction: discord.Interaction):
     elif custom_id == "delserver_no":
         await patch_msg(interaction, [container(txt("## Delete Cancelled"), sep(), txt("No Emojis Were Deleted From The Server."))])
 
-    # ── Fetchpet Save ──────────────────────────────────────────────────────────
+    # ── Fetchpet Save ─────────────────────────────────────────────────────────
 
     elif custom_id.startswith("fetchpet_save:"):
         key  = custom_id[len("fetchpet_save:"):]
@@ -1785,7 +1921,9 @@ async def on_interaction(interaction: discord.Interaction):
             await patch_msg(interaction, [container(
                 txt("## Pet Saved Successfully"),
                 sep(),
-                section(f"**{title_case(name)}**\n\n**Wiki URL:**\n```\n{shorten(railway_url)}\n```", railway_url),
+                section(f"**{title_case(name)}**", railway_url),
+                sep(),
+                txt(f"**Wiki URL:**\n```\n{shorten(railway_url)}\n```"),
                 sep(),
                 txt("**GitHub** — Pushed & Sorted A To Z"),
             )])
@@ -1798,7 +1936,7 @@ async def on_interaction(interaction: discord.Interaction):
         name = info["name"] if info else "Pet"
         await patch_msg(interaction, [container(txt("## Discarded"), sep(), txt(f"**{title_case(name)}** Was Not Saved To GitHub."))])
 
-    # ── Auto Emoji Save ────────────────────────────────────────────────────────
+    # ── Auto Emoji Save ───────────────────────────────────────────────────────
 
     elif custom_id.startswith("autoemoji_save:"):
         key  = custom_id[len("autoemoji_save:"):]
@@ -2030,9 +2168,7 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
     else:
         await followup(interaction, [container(txt("## GitHub Push Failed"), sep(), txt(f"**Error:**\n```\n{push_err[:300]}\n```"))])
 
-
 # ══════════════════════════  PREFIX COMMANDS & EVENTS  ══════════════════════════
-
 
 # ── Auto-Init GitHub Files ────────────────────────────────────────────────────
 
