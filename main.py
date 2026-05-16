@@ -42,7 +42,6 @@ def max_emoji_slots(premium_tier: int) -> int:
 intents    = discord.Intents.default()
 bot        = commands.Bot(command_prefix="!", intents=intents)
 tree       = bot.tree
-http: aiohttp.ClientSession | None = None  # Global shared session
 
 # ── Owner Guard ───────────────────────────────────────────────────────────────
 
@@ -123,7 +122,7 @@ def webhook_url(interaction: discord.Interaction) -> str:
 
 async def send_v2(interaction: discord.Interaction, components: list[dict]):
     url = webhook_url(interaction)
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.post(url, json={"flags": FLAGS_V2, "components": components}) as r:
             if r.status not in (200, 204):
                 raise Exception(f"Discord {r.status}: {(await r.text())[:200]}")
@@ -132,7 +131,7 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
     url     = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
     payload = {"flags": FLAGS_V2, "components": components}
     for _ in range(5):
-        async with (http or aiohttp.ClientSession()) as s:
+        async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload) as r:
                 if r.status in (200, 204):
                     return
@@ -147,7 +146,7 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
 
 async def patch_msg(interaction: discord.Interaction, components: list[dict]):
     url = f"{webhook_url(interaction)}/messages/@original"
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         await s.patch(url, json={"flags": FLAGS_V2, "components": components})
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
@@ -232,7 +231,7 @@ def to_lua(data: dict) -> str:
 async def gh_fetch(filename: str) -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.get(url, headers=headers) as r:
             if r.status == 404: return {}, ""
             if r.status != 200: raise Exception(f"GitHub {r.status}: {(await r.text())[:200]}")
@@ -256,7 +255,7 @@ async def gh_push(filename: str, data: dict, sha: str, msg: str):
     body      = {"message": msg, "content": encoded, "branch": GITHUB_BRANCH}
     if fresh_sha or sha:                     # Only Send SHA When File Already Exists
         body["sha"] = fresh_sha or sha
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.put(url, headers=headers, json=body) as r:
             if r.status not in (200, 201):
                 raise Exception(f"GitHub Push {r.status}: {(await r.text())[:300]}")
@@ -266,7 +265,7 @@ async def gh_push(filename: str, data: dict, sha: str, msg: str):
 async def fetch_pets() -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE}?ref={GITHUB_BRANCH}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.get(url, headers=headers) as r:
             if r.status == 404: return {}, ""          # File Does Not Exist — Will Be Created On Push
             if r.status != 200: raise Exception(f"GitHub {r.status}: {(await r.text())[:200]}")
@@ -279,7 +278,7 @@ async def fetch_pets() -> tuple[dict, str]:
 async def _gh_latest_sha(filename: str, headers: dict) -> str:
     """Always fetch the latest SHA for a file to avoid 409 conflicts."""
     url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.get(url, headers=headers) as r:
             if r.status == 200:
                 return (await r.json()).get("sha", "")
@@ -306,7 +305,7 @@ async def push_pets(data: dict, sha: str, msg: str):
         body      = {"message": msg, "content": encoded, "branch": GITHUB_BRANCH}
         if fresh_sha:                        # Only Send SHA When File Already Exists
             body["sha"] = fresh_sha
-        async with (http or aiohttp.ClientSession()) as s:
+        async with aiohttp.ClientSession() as s:
             async with s.put(url, headers=headers, json=body) as r:
                 if r.status not in (200, 201):
                     raise Exception(f"GitHub Push [{filename}] {r.status}: {(await r.text())[:300]}")
@@ -681,7 +680,7 @@ async def deletepet(interaction: discord.Interaction, name: str):
             ),
         ],
     }
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._delpet_pending = getattr(bot, "_delpet_pending", {})
@@ -787,7 +786,7 @@ async def fetchpet(interaction: discord.Interaction, name: str):
                 ),
             ],
         }
-        async with (http or aiohttp.ClientSession()) as s:
+        async with aiohttp.ClientSession() as s:
             async with s.post(wh_url, json=payload) as r:
                 if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
         bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
@@ -810,7 +809,7 @@ async def fetchpet(interaction: discord.Interaction, name: str):
             ),
         )],
     }
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.post(wh_url2, json=payload2) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._fetchpet_pending = getattr(bot, "_fetchpet_pending", {})
@@ -844,7 +843,7 @@ async def syncpets(interaction: discord.Interaction):
             ),
         ],
     }
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._syncpets_pending = getattr(bot, "_syncpets_pending", {})
@@ -1230,7 +1229,7 @@ async def clearemojis(interaction: discord.Interaction, target: str = "all"):
             ),
         ],
     }
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
 
@@ -1283,7 +1282,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     bot_token = BOT_TOKEN
 
     # Get Available Emoji Slots — fetch guild to get real boost tier
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers={"Authorization": f"Bot {bot_token}"}) as rg:
             tier       = (await rg.json()).get("premium_tier", 0) if rg.status == 200 else 0
         max_slots  = max_emoji_slots(tier)
@@ -1452,7 +1451,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
             ),
         )],
     }
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         await s.post(wh_url, json=payload)
 
     # Store pending data for button handler
@@ -1578,7 +1577,7 @@ async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"
             ),
         ],
     }
-    async with (http or aiohttp.ClientSession()) as s:
+    async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._delserver_guild = interaction.guild.id
@@ -2020,9 +2019,6 @@ async def sync_cmd(ctx: commands.Context):
 
 @bot.event
 async def on_ready():
-    global http
-    if http is None or http.closed:
-        http = aiohttp.ClientSession()
     await tree.sync()
     await ensure_files()                       # Auto-Create Files If Missing
     print(f"[DK] Logged In As: {bot.user}")
