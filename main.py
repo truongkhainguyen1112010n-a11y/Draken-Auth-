@@ -1357,19 +1357,12 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     async with aiohttp.ClientSession() as session:
         for i in range(0, total_upload, 3):
             batch = to_upload[i:i+3]
-            bar   = progress_bar(i, total_upload)
-            # patch_msg updates @original (the deferred thinking state) — same message every time
-            await patch_msg(interaction, [container(
-                txt(f"**Uploading {total_upload} Emoji(s)...** {bar}"),
-                sep(),
-                txt(f"*Batch {i//3 + 1} / {(total_upload + 2) // 3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload) + len(failed_dl)}*"),
-            )])
 
             tasks = []
             for name, thumb in batch:
                 async def process_one(n=name, t=thumb):
                     img = await download_and_resize(t, session)
-                    if img is None: return ("dl_fail", n, "Could Not Download Image")
+                    if img is None: return ("dl_fail", n, f"Download Failed: {t[:60]}")
                     ename       = sanitize_name(n)
                     result, err = await upload_emoji(guild_id, bot_token, ename, img, session)
                     if result and "id" in result:
@@ -1392,6 +1385,15 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                         skipped_by_limit.append(res[1])
                     else:
                         failed_upload.append(f"{res[1]}  {err_detail}")
+
+            # Update progress AFTER processing batch
+            done_count = i + len(batch)
+            bar = progress_bar(done_count, total_upload)
+            await patch_msg(interaction, [container(
+                txt(f"**Uploading {total_upload} Emoji(s)...** {bar}"),
+                sep(),
+                txt(f"*Batch {i//3 + 1} / {(total_upload + 2) // 3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload) + len(failed_dl)}*"),
+            )])
 
             if slot_full:
                 # Get Remaining Unprocessed Items
