@@ -29,11 +29,14 @@ RAILWAY_PROXY         = os.environ.get("RAILWAY_PROXY",         "https://proxy-p
 FANDOM_BASE           = "https://stealabrainrot.fandom.com/wiki/"
 FLAGS_V2              = 32768
 OWNER_ID              = 1498384419805986886
-MAX_EMOJI_SLOTS       = 50   # Server without boost
 
 def title_case(s: str) -> str:
     """Capitalize first letter of every word."""
     return ' '.join(w[0].upper() + w[1:] if w else w for w in s.split(' '))
+
+def max_emoji_slots(premium_tier: int) -> int:
+    """Return max emoji slots based on server boost tier."""
+    return {0: 50, 1: 100, 2: 150, 3: 250}.get(premium_tier, 50)
 
 # ── Bot Setup ─────────────────────────────────────────────────────────────────
 
@@ -1243,20 +1246,23 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     guild_id  = interaction.guild.id
     bot_token = BOT_TOKEN
 
-    # Get Available Emoji Slots
+    # Get Available Emoji Slots — fetch guild to get real boost tier
     async with aiohttp.ClientSession() as s:
+        async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers={"Authorization": f"Bot {bot_token}"}) as rg:
+            tier       = (await rg.json()).get("premium_tier", 0) if rg.status == 200 else 0
+        max_slots  = max_emoji_slots(tier)
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}/emojis", headers={"Authorization": f"Bot {bot_token}"}) as r:
             if r.status == 200:
                 current_emojis = await r.json()
                 slots_used = len(current_emojis)
-                slots_free = MAX_EMOJI_SLOTS - slots_used
+                slots_free = max_slots - slots_used
             else:
                 slots_used = 0
-                slots_free = MAX_EMOJI_SLOTS
+                slots_free = max_slots
 
     await followup(interaction, [container(
         txt("## Auto Emoji Upload Starting..."), sep(),
-        txt(f"**Step 1/4:** Scraping Wiki & Loading GitHub...\n**Mode:** `{mode}`    **Skip Existing:** `{skip_existing}`\n**Server Slots:** {slots_used}/{MAX_EMOJI_SLOTS} Used    {slots_free} Free"),
+        txt(f"**Step 1/4:** Scraping Wiki & Loading GitHub...\n**Mode:** `{mode}`    **Skip Existing:** `{skip_existing}`\n**Server Slots:** {slots_used}/{max_slots} Used    {slots_free} Free"),
     )])
 
     try:
@@ -1303,7 +1309,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     if not to_upload:
         msg = "All Items Either Have No Image, Or Are Already Mapped."
         if skipped_by_limit:
-            msg += f"\n\n **Server Is Full ({slots_used}/{MAX_EMOJI_SLOTS})!**\nUse `/deleteserveremojis` To Free Up Slots First."
+            msg += f"\n\n **Server Is Full ({slots_used}/{max_slots})!**\nUse `/deleteserveremojis` To Free Up Slots First."
         await followup(interaction, [container(txt("##  Nothing To Upload"), sep(), txt(f"{msg}\n\n Run `/getemojis` To See Current Status."))]); return
 
     uploaded_ok:   list[tuple[str, str]] = []
@@ -1353,7 +1359,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                 await followup(interaction, [container(
                     txt("## Server Emoji Slots Are Full"), sep(),
                     txt(
-                        f"**Server Has Reached The Emoji Limit ({MAX_EMOJI_SLOTS} Slots).**\n\n"
+                        f"**Server Has Reached The Emoji Limit ({max_slots} Slots — Boost Tier {tier}).**\n\n"
                         f"**Uploaded This Session:** {len(uploaded_ok)}\n"
                         f"**Could Not Upload ({len(skipped_by_limit)}):**\n"
                         + "\n".join(f" `{n}`" for n in skipped_by_limit[:30])
@@ -1991,6 +1997,6 @@ async def on_ready():
     print(f"[DK]    Emojis:    {GITHUB_EMOJI_FILE}")
     print(f"[DK]    Traits:    {GITHUB_TRAITS_FILE}")
     print(f"[DK]    Mutations: {GITHUB_MUTATIONS_FILE}")
-    print(f"[DK] Max Emoji Slots: {MAX_EMOJI_SLOTS}")
+    print(f"[DK] Max Emoji Slots: Dynamic (Based On Boost Tier)")
 
 bot.run(BOT_TOKEN)
