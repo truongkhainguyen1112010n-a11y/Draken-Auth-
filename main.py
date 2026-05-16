@@ -1212,9 +1212,19 @@ async def scrapeallbrainrots(
     for i, (name, img_url) in enumerate(to_add):
         await patch_msg(interaction, _progress(i, name))
 
-        # img_url is pre-fetched via pageimages API — no per-pet HTTP request needed
-        if img_url:
-            data[name] = img_url
+        final_url: str | None = img_url or None
+
+        # For the few pets without images from the batch API, try scrape_pet_image
+        if not final_url:
+            try:
+                wikia_url, _ = await scrape_pet_image(name)
+                if wikia_url:
+                    final_url = to_railway(wikia_url)
+            except Exception:
+                pass
+
+        if final_url:
+            data[name] = final_url
             added_ok.append(name)
             recent_done.append(title_case(name))
         else:
