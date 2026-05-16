@@ -184,7 +184,8 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
 async def patch_msg(interaction: discord.Interaction, components: list[dict]):
     url = f"{webhook_url(interaction)}/messages/@original"
     async with aiohttp.ClientSession() as s:
-        await s.patch(url, json={"flags": FLAGS_V2, "components": components})
+        async with s.patch(url, json={"flags": FLAGS_V2, "components": components}) as r:
+            await r.read()   # consume body so the connection is properly released
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
 
@@ -1581,7 +1582,8 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         )],
     }
     async with aiohttp.ClientSession() as s:
-        await s.post(wh_url, json=payload)
+        async with s.post(wh_url, json=payload) as r:
+            await r.read()
 
     bot._autoemoji_pending = getattr(bot, "_autoemoji_pending", {})
     bot._autoemoji_pending[akey] = {
