@@ -202,7 +202,9 @@ def is_cdn(url: str) -> bool:
 def _clean_wikia_url(url: str) -> str:
     """Normalize Fandom/wikia URL to a clean static.wikia.nocookie.net URL."""
     url = re.sub(r'https?://vignette\d*\.wikia\.nocookie\.net', 'https://static.wikia.nocookie.net', url)
-    url = re.sub(r'/scale-to-width-down/\d+', '', url)
+    # Strip ALL Fandom CDN resize/thumbnail path segments after /revision/latest
+    # e.g. /scale-to-width-down/200  /smart/width/40/height/30  /top-crop/width/200/height/200
+    url = re.sub(r'(/revision/latest)(?:/[^?#]*)?', r'\1', url)
     # Keep ?cb=... so Discord CDN caches correctly
     return url
 
