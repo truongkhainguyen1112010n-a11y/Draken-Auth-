@@ -103,17 +103,18 @@ def btn_yes(custom_id: str) -> dict:
 def btn_no(custom_id: str) -> dict:
     return btn("No", custom_id, style=2)
 
-def progress_bar(done: int, total: int, width: int = 16) -> str:
+def progress_bar(done: int, total: int, width: int = 20) -> str:
     pct    = done / total if total else 1
     filled = int(pct * width)
     empty  = width - filled
     if filled == 0:
-        bar = "╭" + "─" * width + "╮"
+        inner = "▱" * width
     elif filled == width:
-        bar = "╭" + "█" * width + "╮"
+        inner = "▰" * width
     else:
-        bar = "╭" + "█" * filled + "╴" + "─" * (empty - 1) + "╮"
-    return f"`{bar}` {done}/{total} ({int(pct * 100)}%)"
+        inner = "▰" * filled + "▱" * empty
+    pct_str = f"{int(pct * 100)}%".rjust(4)
+    return f"`{inner}` {done}/{total} ({pct_str})"
 
 # ── Discord Helpers ───────────────────────────────────────────────────────────
 
@@ -310,8 +311,9 @@ async def push_pets(data: dict, sha: str, msg: str):
                 if r.status not in (200, 201):
                     raise Exception(f"GitHub Push [{filename}] {r.status}: {(await r.text())[:300]}")
 
-    # Push both files (thumbnails.json as JSON, thumbnails1.json as JSON)
+    # Push sequentially — each fetch fresh SHA to avoid 409 conflicts
     await _push_file(GITHUB_FILE)
+    await asyncio.sleep(0.5)   # Small gap so GitHub registers first push
     await _push_file(GITHUB_JSON_FILE)
 
 
@@ -746,7 +748,7 @@ async def listpets(interaction: discord.Interaction):
     )])
     for i in range(0, len(pet_names), 5):
         chunk = pet_names[i:i+5]
-        items = [txt(f"**Pets ({i+1}{i+len(chunk)}):**")]
+        items = []
         for j, pname in enumerate(chunk):
             if j > 0: items.append(sep())
             items.append(section(f"**{pname}**", data[pname]))
