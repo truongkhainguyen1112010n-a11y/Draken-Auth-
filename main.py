@@ -1779,6 +1779,72 @@ async def on_interaction(interaction: discord.Interaction):
     elif custom_id == "delserver_no":
         await patch_msg(interaction, [container(txt("## Delete Cancelled"), sep(), txt("No Emojis Were Deleted From The Server."))])
 
+    # ── Fetchpet Save ──────────────────────────────────────────────────────────
+
+    elif custom_id.startswith("fetchpet_save:"):
+        key  = custom_id[len("fetchpet_save:"):]
+        info = getattr(bot, "_fetchpet_pending", {}).pop(key, None)
+        if not info:
+            await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run `/fetchpet` Again."))]); return
+        railway_url = info["railway_url"]; data = info["data"]; sha = info["sha"]; name = info["name"]
+        try:
+            data[name] = railway_url
+            await push_pets(data, sha, f"[DK] Auto-Fetch Added: {name}")
+            await patch_msg(interaction, [container(
+                txt("## Pet Saved Successfully"),
+                sep(),
+                section(f"**{title_case(name)}**\n\n**Wiki URL:**\n```\n{shorten(railway_url)}\n```", railway_url),
+                sep(),
+                txt("**GitHub** — Pushed & Sorted A To Z"),
+            )])
+        except Exception as e:
+            await patch_msg(interaction, [container(txt("## Save Failed"), sep(), txt(f"**Error:**\n```\n{str(e)[:200]}\n```"))])
+
+    elif custom_id.startswith("fetchpet_discard:"):
+        key  = custom_id[len("fetchpet_discard:"):]
+        info = getattr(bot, "_fetchpet_pending", {}).pop(key, None)
+        name = info["name"] if info else "Pet"
+        await patch_msg(interaction, [container(txt("## Discarded"), sep(), txt(f"**{title_case(name)}** Was Not Saved To GitHub."))])
+
+    # ── Auto Emoji Save ────────────────────────────────────────────────────────
+
+    elif custom_id.startswith("autoemoji_save:"):
+        key  = custom_id[len("autoemoji_save:"):]
+        info = getattr(bot, "_autoemoji_pending", {}).pop(key, None)
+        if not info:
+            await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run `/autoemojis` Again."))]); return
+        uploaded_ok    = info["uploaded_ok"]
+        traits_data    = info["traits_data"]
+        mutations_data = info["mutations_data"]
+        await patch_msg(interaction, [container(txt("## Saving To GitHub..."), sep(), txt(f"Pushing {len(uploaded_ok)} Emojis..."))])
+        try:
+            trait_names_set    = {n for n, _ in traits_data}
+            mutation_names_set = {n for n, _ in mutations_data}
+            t_data, t_sha = await gh_fetch(GITHUB_TRAITS_FILE)
+            m_data, m_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
+            traits_added = 0; mutations_added = 0
+            for name, emoji_str in uploaded_ok:
+                if name in trait_names_set:
+                    t_data[name] = emoji_str; traits_added += 1
+                elif name in mutation_names_set:
+                    m_data[name] = emoji_str; mutations_added += 1
+            if traits_added:
+                await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] AutoEmojis: +{traits_added} Traits")
+            if mutations_added:
+                await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] AutoEmojis: +{mutations_added} Mutations")
+            await patch_msg(interaction, [container(
+                txt("## Emojis Saved To GitHub"),
+                sep(),
+                txt(f"**Traits Saved:** {traits_added} Emojis\n**Mutations Saved:** {mutations_added} Emojis\n\n**GitHub** — Pushed & Sorted A To Z"),
+            )])
+        except Exception as e:
+            await patch_msg(interaction, [container(txt("## Save Failed"), sep(), txt(f"**Error:**\n```\n{str(e)[:300]}\n```"))])
+
+    elif custom_id.startswith("autoemoji_discard:"):
+        key = custom_id[len("autoemoji_discard:"):]
+        getattr(bot, "_autoemoji_pending", {}).pop(key, None)
+        await patch_msg(interaction, [container(txt("## Discarded"), sep(), txt("Emojis Were Not Saved To GitHub."))])
+
 # ── /Refetchbroken ────────────────────────────────────────────────────────────
 
 @tree.command(name="refetchbroken", description="Auto-Fetch Images For Pets With Broken Or Missing URLs.")
