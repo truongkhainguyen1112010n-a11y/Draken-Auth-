@@ -39,9 +39,10 @@ def max_emoji_slots(premium_tier: int) -> int:
 
 # ── Bot Setup ─────────────────────────────────────────────────────────────────
 
-intents = discord.Intents.default()
-bot     = commands.Bot(command_prefix="!", intents=intents)
-tree    = bot.tree
+intents    = discord.Intents.default()
+bot        = commands.Bot(command_prefix="!", intents=intents)
+tree       = bot.tree
+http: aiohttp.ClientSession | None = None  # Global shared session
 
 # ── Owner Guard ───────────────────────────────────────────────────────────────
 
@@ -103,11 +104,17 @@ def btn_yes(custom_id: str) -> dict:
 def btn_no(custom_id: str) -> dict:
     return btn("No", custom_id, style=2)
 
-def progress_bar(done: int, total: int, width: int = 18) -> str:
+def progress_bar(done: int, total: int, width: int = 16) -> str:
     pct    = done / total if total else 1
     filled = int(pct * width)
-    bar    = "█" * filled + "░" * (width - filled)
-    return f"`╔{bar}╗` {done}/{total} ({int(pct * 100)}%)"
+    empty  = width - filled
+    if filled == 0:
+        bar = "╭" + "─" * width + "╮"
+    elif filled == width:
+        bar = "╭" + "█" * width + "╮"
+    else:
+        bar = "╭" + "█" * filled + "╴" + "─" * (empty - 1) + "╮"
+    return f"`{bar}` {done}/{total} ({int(pct * 100)}%)"
 
 # ── Discord Helpers ───────────────────────────────────────────────────────────
 
@@ -116,7 +123,7 @@ def webhook_url(interaction: discord.Interaction) -> str:
 
 async def send_v2(interaction: discord.Interaction, components: list[dict]):
     url = webhook_url(interaction)
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.post(url, json={"flags": FLAGS_V2, "components": components}) as r:
             if r.status not in (200, 204):
                 raise Exception(f"Discord {r.status}: {(await r.text())[:200]}")
@@ -125,7 +132,7 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
     url     = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
     payload = {"flags": FLAGS_V2, "components": components}
     for _ in range(5):
-        async with aiohttp.ClientSession() as s:
+        async with (http or aiohttp.ClientSession()) as s:
             async with s.post(url, json=payload) as r:
                 if r.status in (200, 204):
                     return
@@ -140,7 +147,7 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
 
 async def patch_msg(interaction: discord.Interaction, components: list[dict]):
     url = f"{webhook_url(interaction)}/messages/@original"
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         await s.patch(url, json={"flags": FLAGS_V2, "components": components})
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
@@ -225,7 +232,7 @@ def to_lua(data: dict) -> str:
 async def gh_fetch(filename: str) -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.get(url, headers=headers) as r:
             if r.status == 404: return {}, ""
             if r.status != 200: raise Exception(f"GitHub {r.status}: {(await r.text())[:200]}")
@@ -249,7 +256,7 @@ async def gh_push(filename: str, data: dict, sha: str, msg: str):
     body      = {"message": msg, "content": encoded, "branch": GITHUB_BRANCH}
     if fresh_sha or sha:                     # Only Send SHA When File Already Exists
         body["sha"] = fresh_sha or sha
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.put(url, headers=headers, json=body) as r:
             if r.status not in (200, 201):
                 raise Exception(f"GitHub Push {r.status}: {(await r.text())[:300]}")
@@ -259,7 +266,7 @@ async def gh_push(filename: str, data: dict, sha: str, msg: str):
 async def fetch_pets() -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE}?ref={GITHUB_BRANCH}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.get(url, headers=headers) as r:
             if r.status == 404: return {}, ""          # File Does Not Exist — Will Be Created On Push
             if r.status != 200: raise Exception(f"GitHub {r.status}: {(await r.text())[:200]}")
@@ -272,7 +279,7 @@ async def fetch_pets() -> tuple[dict, str]:
 async def _gh_latest_sha(filename: str, headers: dict) -> str:
     """Always fetch the latest SHA for a file to avoid 409 conflicts."""
     url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.get(url, headers=headers) as r:
             if r.status == 200:
                 return (await r.json()).get("sha", "")
@@ -299,7 +306,7 @@ async def push_pets(data: dict, sha: str, msg: str):
         body      = {"message": msg, "content": encoded, "branch": GITHUB_BRANCH}
         if fresh_sha:                        # Only Send SHA When File Already Exists
             body["sha"] = fresh_sha
-        async with aiohttp.ClientSession() as s:
+        async with (http or aiohttp.ClientSession()) as s:
             async with s.put(url, headers=headers, json=body) as r:
                 if r.status not in (200, 201):
                     raise Exception(f"GitHub Push [{filename}] {r.status}: {(await r.text())[:300]}")
@@ -674,7 +681,7 @@ async def deletepet(interaction: discord.Interaction, name: str):
             ),
         ],
     }
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._delpet_pending = getattr(bot, "_delpet_pending", {})
@@ -780,13 +787,14 @@ async def fetchpet(interaction: discord.Interaction, name: str):
                 ),
             ],
         }
-        async with aiohttp.ClientSession() as s:
+        async with (http or aiohttp.ClientSession()) as s:
             async with s.post(wh_url, json=payload) as r:
                 if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
         bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
         bot._fetchpet_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
         return
     # Show confirm dialog before saving
+    key    = f"{interaction.id}"
     wh_url2 = webhook_url(interaction)
     payload2 = {
         "flags": FLAGS_V2,
@@ -797,16 +805,16 @@ async def fetchpet(interaction: discord.Interaction, name: str):
             sep(),
             txt("**Save This Pet To GitHub?**"),
             action_row(
-                btn("Save To GitHub", f"fetchpet_save:{name}", style=2),
-                btn("Discard",        f"fetchpet_discard:{name}", style=2),
+                btn("Save To GitHub", f"fetchpet_save:{key}", style=2),
+                btn("Discard",        f"fetchpet_discard:{key}", style=2),
             ),
         )],
     }
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.post(wh_url2, json=payload2) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
-    bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
-    bot._fetchpet_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
+    bot._fetchpet_pending = getattr(bot, "_fetchpet_pending", {})
+    bot._fetchpet_pending[key] = {"railway_url": railway_url, "data": data, "sha": sha, "name": name}
 
 # ── /Syncpets ─────────────────────────────────────────────────────────────────
 
@@ -836,7 +844,7 @@ async def syncpets(interaction: discord.Interaction):
             ),
         ],
     }
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._syncpets_pending = getattr(bot, "_syncpets_pending", {})
@@ -1222,7 +1230,7 @@ async def clearemojis(interaction: discord.Interaction, target: str = "all"):
             ),
         ],
     }
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
 
@@ -1275,7 +1283,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     bot_token = BOT_TOKEN
 
     # Get Available Emoji Slots — fetch guild to get real boost tier
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers={"Authorization": f"Bot {bot_token}"}) as rg:
             tier       = (await rg.json()).get("premium_tier", 0) if rg.status == 200 else 0
         max_slots  = max_emoji_slots(tier)
@@ -1345,18 +1353,21 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     uploaded_ok:   list[tuple[str, str]] = []
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
+    total_upload = len(to_upload)
 
-    # Send initial progress message then patch in-place
-    empty_bar = "░" * 20
-    await followup(interaction, [container(txt(f"**Downloading & Uploading...** `[{empty_bar}]` 0/{len(to_upload)} (0%)\n*Uploading To Server...*"))])
+    # Send ONE progress message — patch it in-place each batch
+    await send_v2(interaction, [container(txt(f"**Uploading {total_upload} Emoji(s)...** {progress_bar(0, total_upload)}\n*Starting...*"))])
 
     async with aiohttp.ClientSession() as session:
-        for i in range(0, len(to_upload), 3):
-            batch    = to_upload[i:i+3]
-            bar_pct  = i / len(to_upload) if to_upload else 1
-            bar_fill = int(bar_pct * 20)
-            bar      = f"`[{'█' * bar_fill}{'░' * (20-bar_fill)}]` {i}/{len(to_upload)} ({int(bar_pct*100)}%)"
-            await patch_msg(interaction, [container(txt(f"**Downloading & Uploading...** {bar}\n*Uploading To Server...*"))])
+        total_upload = len(to_upload)
+        for i in range(0, total_upload, 3):
+            batch = to_upload[i:i+3]
+            bar   = progress_bar(i, total_upload)
+            await patch_msg(interaction, [container(
+                txt(f"**Uploading {total_upload} Emoji(s)...** {bar}"),
+                sep(),
+                txt(f"*Batch {i//3 + 1} / {(total_upload + 2) // 3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload) + len(failed_dl)}*"),
+            )])
 
             tasks = []
             for name, thumb in batch:
@@ -1421,6 +1432,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         skipped_txt += "\n".join(f"• `{n}`" for n in skipped_by_limit[:20])
         if len(skipped_by_limit) > 20: skipped_txt += f"\n*...And {len(skipped_by_limit)-20} More*"
 
+    akey    = str(interaction.id)
     wh_url  = webhook_url(interaction)
     payload = {
         "flags": FLAGS_V2,
@@ -1435,17 +1447,17 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
             sep(),
             txt("**Save These Emojis To GitHub?**\n`traits.lua` + `mutations.lua` Will Be Updated."),
             action_row(
-                btn("Save To GitHub", f"autoemoji_save:{id(uploaded_ok)}", style=2),
-                btn("Discard", f"autoemoji_discard:{id(uploaded_ok)}", style=2),
+                btn("Save To GitHub", f"autoemoji_save:{akey}", style=2),
+                btn("Discard", f"autoemoji_discard:{akey}", style=2),
             ),
         )],
     }
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         await s.post(wh_url, json=payload)
 
     # Store pending data for button handler
     bot._autoemoji_pending = getattr(bot, "_autoemoji_pending", {})
-    bot._autoemoji_pending[str(id(uploaded_ok))] = {
+    bot._autoemoji_pending[akey] = {
         "uploaded_ok":   uploaded_ok,
         "traits_data":   traits_data,
         "mutations_data": mutations_data,
@@ -1566,7 +1578,7 @@ async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"
             ),
         ],
     }
-    async with aiohttp.ClientSession() as s:
+    async with (http or aiohttp.ClientSession()) as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._delserver_guild = interaction.guild.id
@@ -1982,7 +1994,7 @@ async def ensure_files():
     ]
     for filename, empty_content, is_json in files:
         check_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
-        async with aiohttp.ClientSession() as s:
+        async with (http or aiohttp.ClientSession()) as s:
             async with s.get(check_url, headers=headers) as r:
                 if r.status == 200:
                     continue    # File Already Exists — Skip
@@ -2012,6 +2024,9 @@ async def sync_cmd(ctx: commands.Context):
 
 @bot.event
 async def on_ready():
+    global http
+    if http is None or http.closed:
+        http = aiohttp.ClientSession()
     await tree.sync()
     await ensure_files()                       # Auto-Create Files If Missing
     print(f"[DK] Logged In As: {bot.user}")
