@@ -625,6 +625,7 @@ async def scrape_category_brainrots(
 
     next_url: str | None = start_url
     page     = 0
+    got_stuck = False   # True when a page returns 0 new items (ScraperAPI cached page 1)
 
     while next_url and next_url not in visited_urls:
         visited_urls.add(next_url)
@@ -633,31 +634,30 @@ async def scrape_category_brainrots(
 
         html, method = await _fetch_html(next_url)
         if html:
-            items        = _parse_items(html)
+            items    = _parse_items(html)
             all_results.extend(items)
-            new_this_pg  = len(all_results) - count_before
-            next_url     = _find_next(html)
+            new_pg   = len(all_results) - count_before
+            next_url = _find_next(html)
 
-            # Detect cached/stuck response — label it but do NOT break.
-            # Let visited_urls stop the loop naturally so all pages are logged.
-            if page > 1 and new_this_pg == 0:
-                method = f"{method} — Cached (0 New Items)"
+            # Detect cached response: page 2+ returned 0 new items
+            if page > 1 and new_pg == 0:
+                got_stuck = True
+                method    = f"{method} — Stuck (Cached, 0 New Items)"
+                if on_page:
+                    await on_page(page, len(all_results), method, None)
+                break
         else:
-            new_this_pg = 0
-            next_url    = None
-            method      = "Failed"
+            next_url = None
 
         if on_page:
-            nxt_label = f"→ Next Starts At `{next_url.split('from=')[1]}`" if next_url and "from=" in next_url else "→ Last Page"
-            await on_page(page, new_this_pg, len(all_results), method, nxt_label)
+            await on_page(page, len(all_results), method, next_url)
 
         if next_url:
             await asyncio.sleep(0.8)
 
     # ── MediaWiki API Fallback ────────────────────────────────────────────────
-    # Trigger when HTML scraping got < 250 unique items
-    # (expected ~200/page × 3 pages = 453 total — if we have <250, pages were missed).
-    if len(all_results) < 250:
+    # Triggered when only page 1 was scraped OR ScraperAPI returned a cached copy.
+    if page <= 1 or got_stuck:
         api_names = await _api_get_all_names()
         api_added = 0
         for name in api_names:
@@ -666,7 +666,7 @@ async def scrape_category_brainrots(
                 all_results.append((name, None))
                 api_added += 1
         if on_page and api_added:
-            await on_page(-1, api_added, len(all_results), "API Fallback", f"→ +{api_added} Names Added")
+            await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names)", None)
 
 
 # ── /Ping ─────────────────────────────────────────────────────────────────────
@@ -1021,12 +1021,12 @@ async def scrapeallbrainrots(
     # ── Step 2 / 3 — Scrape Pages ─────────────────────────────────────────────
     page_log: list[str] = []
 
-    async def on_page(page: int, this_page: int, total: int, method: str, nxt_label: str):
+    async def on_page(page: int, total: int, method: str, next_url: str | None):
         if page == -1:
-            line = f"**API Fallback** `{method}` — {this_page} Names Added   {nxt_label}"
+            line = f"**API Fallback** — {method}"
         else:
-            cached = " ⚠️" if "Cached" in method else ""
-            line   = f"**Page {page}**{cached} `{method}` — **{this_page} Found This Page** ({total} Total)   {nxt_label}"
+            nxt  = f"→ Next Starts At `{next_url.split('from=')[1]}`" if next_url and "from=" in next_url else "→ Last Page"
+            line = f"**Page {page}** `{method}` — {total} Found So Far   {nxt}"
         page_log.append(line)
         await patch_msg(interaction, [container(
             txt("## Scanning Category Pages..."),
