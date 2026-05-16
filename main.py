@@ -625,7 +625,6 @@ async def scrape_category_brainrots(
 
     next_url: str | None = start_url
     page     = 0
-    got_stuck = False   # True if a page returned 0 new items (cached/wrong response)
 
     while next_url and next_url not in visited_urls:
         visited_urls.add(next_url)
@@ -634,30 +633,31 @@ async def scrape_category_brainrots(
 
         html, method = await _fetch_html(next_url)
         if html:
-            items    = _parse_items(html)
+            items        = _parse_items(html)
             all_results.extend(items)
-            next_url = _find_next(html)
+            new_this_pg  = len(all_results) - count_before
+            next_url     = _find_next(html)
 
-            # Detect stuck: page 2+ returned 0 new items → ScraperAPI/CDN cached page 1
-            if page > 1 and len(all_results) == count_before:
-                got_stuck = True
-                if on_page:
-                    await on_page(page, len(all_results), f"{method} — Stuck (0 New Items, Cached Response)", None)
-                break
+            # Detect cached/stuck response — label it but do NOT break.
+            # Let visited_urls stop the loop naturally so all pages are logged.
+            if page > 1 and new_this_pg == 0:
+                method = f"{method} — Cached (0 New Items)"
         else:
-            next_url = None
+            new_this_pg = 0
+            next_url    = None
+            method      = "Failed"
 
         if on_page:
-            await on_page(page, len(all_results), method, next_url)
+            nxt_label = f"→ Next Starts At `{next_url.split('from=')[1]}`" if next_url and "from=" in next_url else "→ Last Page"
+            await on_page(page, new_this_pg, len(all_results), method, nxt_label)
 
         if next_url:
             await asyncio.sleep(0.8)
 
     # ── MediaWiki API Fallback ────────────────────────────────────────────────
-    # Triggered when:
-    #   • Only page 1 was fetched (Cloudflare blocked page 2+), OR
-    #   • ScraperAPI returned a cached copy of page 1 for page 2 (got_stuck)
-    if page <= 1 or got_stuck:
+    # Trigger when HTML scraping got < 250 unique items
+    # (expected ~200/page × 3 pages = 453 total — if we have <250, pages were missed).
+    if len(all_results) < 250:
         api_names = await _api_get_all_names()
         api_added = 0
         for name in api_names:
@@ -666,9 +666,327 @@ async def scrape_category_brainrots(
                 all_results.append((name, None))
                 api_added += 1
         if on_page and api_added:
-            await on_page(-1, len(all_results), f"API Fallback — Added {api_added} Remaining Names", None)
+            await on_page(-1, api_added, len(all_results), "API Fallback", f"→ +{api_added} Names Added")
 
-    return all_results
+
+# ── /Ping ─────────────────────────────────────────────────────────────────────
+
+@tree.command(name="ping", description="Check The Bot's Latency And Connection Status.")
+@discord.app_commands.default_permissions(administrator=True)
+async def ping(interaction: discord.Interaction):
+    start = time.monotonic()
+    await interaction.response.defer(thinking=True)
+    latency_ms = round((time.monotonic() - start) * 1000)
+    ws_ms      = round(bot.latency * 1000)
+    status     = "Excellent" if ws_ms < 80 else "Normal" if ws_ms < 150 else "Slow"
+    await send_v2(interaction, [container(
+        txt("## Pong"),
+        sep(),
+        txt(f"**Websocket Latency:** `{ws_ms}ms`"),
+        sep_sm(),
+        txt(f"**Response Time:** `{latency_ms}ms`"),
+        sep_sm(),
+        txt(f"**Status:** {status}"),
+    )])
+
+# ── /Addpet ───────────────────────────────────────────────────────────────────
+
+@tree.command(name="addpet", description="Add A New Pet With Its Thumbnail URL To GitHub.")
+@discord.app_commands.default_permissions(administrator=True)
+async def addpet(interaction: discord.Interaction, name: str, url: str):
+    await interaction.response.defer(thinking=True)
+    converted = to_railway(url)
+    label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
+    try:
+        data, sha = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Add Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))])
+        return
+    if name in data:
+        exist = data[name]
+        await send_v2(interaction, [container(
+            txt("## Pet Already Exists"),
+            sep(),
+            section(f"**{name}**", exist),
+            sep(),
+            txt(f"**Current URL:**\n```\n{shorten(exist, 240)}\n```"),
+            sep(),
+            txt(f"**New URL You Tried:**\n```\n{shorten(converted, 240)}\n```"),
+            sep_sm(),
+            txt("Use `/updatepet` To Change The URL."),
+        )])
+        return
+    try:
+        data[name] = converted
+        await push_pets(data, sha, f"[DK] Added: {name}")
+        ok = True
+    except Exception as e:
+        ok = False; err = str(e)
+    if ok:
+        label_text = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
+        await send_v2(interaction, [container(txt("## Pet Added Successfully"),
+        sep(),
+        section(f"**{title_case(name)}**\n\n{label_text}", converted),
+        sep(),
+        txt(f"**URL:**\n```\n{shorten(converted)}\n```"),
+        sep(),
+        txt("**GitHub** — Pushed & Sorted A To Z"))])
+    else:
+        await send_v2(interaction, [container(txt("## Failed To Add Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub**  Push Failed\n```\n{err[:200]}\n```"))])
+
+# ── /Updatepet ────────────────────────────────────────────────────────────────
+
+@tree.command(name="updatepet", description="Update The Thumbnail URL Of An Existing Pet.")
+@discord.app_commands.default_permissions(administrator=True)
+async def updatepet(interaction: discord.Interaction, name: str, url: str):
+    await interaction.response.defer(thinking=True)
+    converted = to_railway(url)
+    label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
+    try:
+        data, sha = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Update Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))])
+        return
+    if name not in data:
+        suggestions = [k for k in data if name.lower() in k.lower()]
+        items = [txt(f"## Pet Not Found\n**Pet:** `{name}`")]
+        if suggestions: items += [sep(), txt("**Similar Pets:**\n" + "\n".join(f" `{s}`" for s in suggestions[:8]))]
+        await send_v2(interaction, [container(*items)]); return
+    old_url = data[name]
+    try:
+        data[name] = converted
+        await push_pets(data, sha, f"[DK] Updated: {name}")
+        ok = True
+    except Exception as e:
+        ok = False; err = str(e)
+    if ok:
+        await send_v2(interaction, [container(txt("## Pet Updated Successfully"),
+        sep(),
+        section(f"**{name}**\n\n{label}", converted),
+        sep(),
+        txt(f"**New URL:**\n```\n{shorten(converted, 240)}\n```"),
+        sep(),
+        txt(f"**Previous URL:**\n```\n{shorten(old_url, 200)}\n```"),
+        sep(),
+        txt("**GitHub** — Pushed & Sorted A To Z"))])
+    else:
+        await send_v2(interaction, [container(txt("## Failed To Update Pet"), sep(), txt(f"**Pet:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+
+# ── /Deletepet ────────────────────────────────────────────────────────────────
+
+@tree.command(name="deletepet", description="Delete A Pet And Its Thumbnail URL From GitHub.")
+@discord.app_commands.default_permissions(administrator=True)
+async def deletepet(interaction: discord.Interaction, name: str):
+    await interaction.response.defer(thinking=True)
+    try:
+        data, sha = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Delete Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))])
+        return
+    if name not in data:
+        suggestions = [k for k in data if name.lower() in k.lower()]
+        items = [txt(f"##  Pet Not Found\n**Pet:** `{name}`")]
+        if suggestions: items += [sep(), txt("**Similar Pets:**\n" + "\n".join(f" `{s}`" for s in suggestions[:8]))]
+        await send_v2(interaction, [container(*items)]); return
+    deleted_url = data[name]
+    wh_url      = webhook_url(interaction)
+    payload = {
+        "flags": FLAGS_V2,
+        "components": [
+            container(
+                txt("## Confirm Delete Pet"),
+                sep(),
+                section(f"**{name}**", deleted_url),
+                sep(),
+                txt(f"**URL:**\n```\n{shorten(deleted_url, 200)}\n```"),
+                sep_sm(),
+                txt("Are You Sure You Want To Delete This Pet?"),
+                action_row(btn_yes(f"delpet_yes:{name}"), btn_no("delpet_no")),
+            ),
+        ],
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(wh_url, json=payload) as r:
+            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
+    bot._delpet_pending = getattr(bot, "_delpet_pending", {})
+    bot._delpet_pending[name] = {"data": data, "sha": sha, "url": deleted_url}
+
+# ── /Getpet ───────────────────────────────────────────────────────────────────
+
+@tree.command(name="getpet", description="Get The Thumbnail URL Of A Specific Pet.")
+@discord.app_commands.default_permissions(administrator=True)
+async def getpet(interaction: discord.Interaction, name: str):
+    await interaction.response.defer(thinking=True)
+    try:
+        data, _ = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Get Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
+    if name not in data:
+        suggestions = [k for k in data if name.lower() in k.lower()]
+        items = [txt(f"##  Pet Not Found\n**Pet:** `{name}`")]
+        if suggestions: items += [sep(), txt("** Did You Mean:**\n" + "\n".join(f" `{s}`" for s in suggestions[:5]))]
+        await send_v2(interaction, [container(*items)]); return
+    url_val = data[name]
+    await send_v2(interaction, [container(txt("## Pet Thumbnail"),
+    sep(),
+    section(f"**{name}**", url_val),
+    sep(),
+    txt(f"**URL:**\n```\n{shorten(url_val)}\n```"))])
+
+# ── /Searchpet ────────────────────────────────────────────────────────────────
+
+@tree.command(name="searchpet", description="Search For Pets By Name Or Keyword.")
+@discord.app_commands.default_permissions(administrator=True)
+async def searchpet(interaction: discord.Interaction, query: str):
+    await interaction.response.defer(thinking=True)
+    try:
+        data, _ = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Search Pets\n **Query:** `{query}`\n\n**Error:**\n```\n{e}\n```"))]); return
+    matches = sorted([k for k in data if query.lower() in k.lower()])
+    if not matches:
+        await send_v2(interaction, [container(txt(f"## No Results Found\n **Query:** `{query}`"))]); return
+    top     = matches[0]
+    top_url = data[top]
+    items   = [
+        txt(f"## Search Results For `{query}`"),
+        sep(),
+        section(f"**Top Match:** `{top}`", top_url),
+        sep(),
+        txt(f"**URL:**\n```\n{shorten(top_url, 240)}\n```"),
+    ]
+    if len(matches) > 1:
+        items += [sep(), txt(f"**Other Matches ({len(matches)-1}):**\n" + "\n".join(f" `{m}`" for m in matches[1:26]))]
+    items += [sep(), txt(f"**Total Matches:** {len(matches)} / {len(data)} Pets")]
+    await send_v2(interaction, [container(*items)])
+
+# ── /Listpets ─────────────────────────────────────────────────────────────────
+
+@tree.command(name="listpets", description="List All Pets And Their Thumbnails Stored In GitHub.")
+@discord.app_commands.default_permissions(administrator=True)
+async def listpets(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        data, _ = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** List Pets\n\n**Error:**\n```\n{e}\n```"))]); return
+    railway_count = sum(1 for v in data.values() if is_railway(v))
+    cdn_count     = sum(1 for v in data.values() if is_cdn(v))
+    other_count   = len(data) - railway_count - cdn_count
+    pet_names     = sorted(data.keys(), key=lambda x: x.lower())
+    await followup(interaction, [container(
+        txt("## Full Pet List"),
+        sep(),
+        txt(f"**Total Pets:** {len(data)}  •  **Wiki:** {railway_count}  •  **CDN:** {cdn_count}  •  **Other:** {other_count}"),
+        sep(),
+        txt("**All Pets (A To Z) — Loading Thumbnails Below...**"),
+    )])
+    for i in range(0, len(pet_names), 5):
+        chunk = pet_names[i:i+5]
+        items = []
+        for j, pname in enumerate(chunk):
+            if j > 0: items.append(sep())
+            items.append(section(f"**{pname}**", data[pname]))
+        await followup(interaction, [container(*items)])
+        await asyncio.sleep(0.8)
+    await followup(interaction, [container(txt(f"**Done  {len(pet_names)} Pets Listed.**"))])
+
+# ── /Fetchpet ─────────────────────────────────────────────────────────────────
+
+@tree.command(name="fetchpet", description="Auto-Fetch A Pet's Image From The Fandom Wiki And Save It.")
+@discord.app_commands.default_permissions(administrator=True)
+async def fetchpet(interaction: discord.Interaction, name: str):
+    await interaction.response.defer(thinking=True)
+    try:
+        wikia_url, debug_info = await scrape_pet_image(name)
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Pet:** `{name}`\n\n**Exception:**\n```\n{e}\n```"))]); return
+    if not wikia_url:
+        page_url = FANDOM_BASE + quote(name.replace(" ", "_"))
+        await send_v2(interaction, [container(txt("## Image Not Found On Wiki"), sep(), txt(f"**Pet:** `{name}`\n\n No Image Found On The Wiki Page.\n\n**Page Checked:**\n```\n{page_url}\n```\n\n**Debug Info:**\n```\n{debug_info[:600]}\n```"))]); return
+    railway_url = to_railway(wikia_url)
+    short_url   = shorten(railway_url)
+    try:
+        data, sha = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Fetch Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
+    if name in data:
+        existing_url = data[name]
+        wh_url       = webhook_url(interaction)
+        payload = {
+            "flags": FLAGS_V2,
+            "components": [
+                container(
+                    txt("## Pet Already Exists"), sep(),
+                    section(f"**{name}**\n\nAlready In GitHub  Overwrite?\n\n**Current URL:**\n```\n{shorten(existing_url)}\n```\n\n**Fetched URL:**\n```\n{short_url}\n```", existing_url),
+                    action_row(btn_yes(f"overwrite_yes:{name}"), btn_no(f"overwrite_no:{name}")),
+                ),
+            ],
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.post(wh_url, json=payload) as r:
+                if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
+        bot._fetchpet_pending       = getattr(bot, "_fetchpet_pending", {})
+        bot._fetchpet_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
+        return
+    # Show confirm dialog before saving
+    key    = f"{interaction.id}"
+    wh_url2 = webhook_url(interaction)
+    payload2 = {
+        "flags": FLAGS_V2,
+        "components": [container(
+            txt("## Pet Image Found"),
+            sep(),
+            section(f"**{title_case(name)}**", railway_url),
+            sep(),
+            txt(f"**Wiki URL:**\n```\n{short_url}\n```"),
+            sep(),
+            txt("**Save This Pet To GitHub?**"),
+            action_row(
+                btn("Save To GitHub", f"fetchpet_save:{key}", style=2),
+                btn("Discard",        f"fetchpet_discard:{key}", style=2),
+            ),
+        )],
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(wh_url2, json=payload2) as r:
+            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
+    bot._fetchpet_pending = getattr(bot, "_fetchpet_pending", {})
+    bot._fetchpet_pending[key] = {"railway_url": railway_url, "data": data, "sha": sha, "name": name}
+
+# ── /Syncpets ─────────────────────────────────────────────────────────────────
+
+@tree.command(name="syncpets", description="Sync All Pet URLs To Railway Proxy Format.")
+@discord.app_commands.default_permissions(administrator=True)
+async def syncpets(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        data, sha = await fetch_pets()
+    except Exception as e:
+        await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Sync Pets\n\n**Error:**\n```\n{e}\n```"))]); return
+    to_convert = {n: u for n, u in data.items() if not is_railway(u) and extract_wikia_url(u)}
+    to_refetch = {n: u for n, u in data.items() if not is_railway(u) and not extract_wikia_url(u)}
+    needs_sync = {**to_convert, **to_refetch}
+    if not needs_sync:
+        await send_v2(interaction, [container(txt("## Already Fully Synced"), sep(), txt(f"**Total Pets:** {len(data)}\n\nAll URLs Are Already On Railway! Nothing To Sync."))]); return
+    preview_lines = "\n".join(f" `{n}`{' (Re-Fetch)' if n in to_refetch else ''}" for n in sorted(needs_sync.keys())[:10])
+    more_note     = f"\n*...And {len(needs_sync)-10} More*" if len(needs_sync) > 10 else ""
+    wh_url        = webhook_url(interaction)
+    payload = {
+        "flags": FLAGS_V2,
+        "components": [
+            container(
+                txt("## Sync Pets"), sep(),
+                txt(f"**Total Pets:** {len(data)}\n**Found {len(needs_sync)} Pet(s) Not Synced:**\n\n{preview_lines}{more_note}\n\nConvert All?"),
+                action_row(btn_yes("syncpets_yes"), btn_no("syncpets_no")),
+            ),
+        ],
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(wh_url, json=payload) as r:
+            if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
+    bot._syncpets_pending = getattr(bot, "_syncpets_pending", {})
+    bot._syncpets_pending["latest"] = {"data": data, "sha": sha, "to_convert": to_convert, "to_refetch": to_refetch}
 
 
 # ── /Scrapeallbrainrots ───────────────────────────────────────────────────────
@@ -703,12 +1021,12 @@ async def scrapeallbrainrots(
     # ── Step 2 / 3 — Scrape Pages ─────────────────────────────────────────────
     page_log: list[str] = []
 
-    async def on_page(page: int, total: int, method: str, next_url: str | None):
+    async def on_page(page: int, this_page: int, total: int, method: str, nxt_label: str):
         if page == -1:
-            line = f"**API Fallback** — {method}"
+            line = f"**API Fallback** `{method}` — {this_page} Names Added   {nxt_label}"
         else:
-            nxt  = f"→ Next Starts At `{next_url.split('from=')[1]}`" if next_url and "from=" in next_url else "→ Last Page"
-            line = f"**Page {page}** `{method}` — {total} Found So Far   {nxt}"
+            cached = " ⚠️" if "Cached" in method else ""
+            line   = f"**Page {page}**{cached} `{method}` — **{this_page} Found This Page** ({total} Total)   {nxt_label}"
         page_log.append(line)
         await patch_msg(interaction, [container(
             txt("## Scanning Category Pages..."),
