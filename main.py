@@ -518,7 +518,8 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     NAME_PAT      = re.compile('class="category-page__member-link"[^>]*>([^<]+)<')
     DATA_SRC_PAT  = re.compile(r'\bdata-src=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
     SRC_PAT       = re.compile(r'\bsrc=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
-    NEXT_PAT      = re.compile(r'href=["\'](/wiki/Category:Listed_Brainrots[?]from=[^"\']+)["\']')
+    # Fandom uses ?pagefrom= OR ?from= for next-page links — match both
+    NEXT_PAT      = re.compile(r'href=["\'](/wiki/Category:Listed_Brainrots[^"\']*(?:pagefrom|from)=[^"\']+)["\']')
 
     all_results:  list[tuple[str, str | None]] = []
     seen_names:   set[str] = set()
@@ -1095,8 +1096,8 @@ async def scrapeallbrainrots(
             added_ok.append(name)
             recent_done.append(title_case(name))
         else:
-            data[name] = ""
             no_image.append(name)
+            # Skip — do NOT add pets with no image to GitHub
 
         # Per-item notification (channel message)
         await asyncio.sleep(0.15)
