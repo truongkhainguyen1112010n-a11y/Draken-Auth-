@@ -511,10 +511,11 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     timeout   = aiohttp.ClientTimeout(total=40)
     hdrs      = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
 
-    LI_PAT   = re.compile('<li class="category-page__member">(.*?)</li>', re.DOTALL)
-    NAME_PAT = re.compile('class="category-page__member-link"[^>]*>([^<]+)<')
-    SRC_PAT  = re.compile(r'\bsrc=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\'"]')
-    NEXT_PAT = re.compile(r'href=["\'](/wiki/Category:Listed_Brainrots[?]from=[^"\']+)["\']')
+    LI_PAT        = re.compile('<li class="category-page__member">(.*?)</li>', re.DOTALL)
+    NAME_PAT      = re.compile('class="category-page__member-link"[^>]*>([^<]+)<')
+    DATA_SRC_PAT  = re.compile(r'\bdata-src=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
+    SRC_PAT       = re.compile(r'\bsrc=["\'](https://static\.wikia\.nocookie\.net/[^"\']+)["\']')
+    NEXT_PAT      = re.compile(r'href=["\'](/wiki/Category:Listed_Brainrots[?]from=[^"\']+)["\']')
 
     all_results:  list[tuple[str, str | None]] = []
     seen_names:   set[str] = set()
@@ -560,10 +561,11 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
                     continue
                 seen_names.add(name)
 
-                # Image is in src= before <noscript>  thumbnail on category page
+                # Prefer data-src (lazy-load full thumbnail) over src (tiny placeholder)
+                # Both are before <noscript> on Fandom category pages
                 ns_idx = block.find("<noscript>")
                 look   = block[:ns_idx] if ns_idx > 0 else block
-                im     = SRC_PAT.search(look)
+                im     = DATA_SRC_PAT.search(look) or SRC_PAT.search(look)
                 if im:
                     img_url = to_railway(_clean_wikia_url(im.group(1)))
                 else:
