@@ -662,6 +662,38 @@ async def scrape_category_brainrots(
                     break
         return names
 
+    async def _api_batch_images(names: list[str]) -> dict[str, str]:
+        """MediaWiki prop=pageimages — no Cloudflare, batch-fetch thumbnails.
+        Returns {name: railway_url}. Processes 50 titles per request."""
+        result: dict[str, str] = {}
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            for i in range(0, len(names), 50):
+                batch = names[i:i + 50]
+                params = {
+                    "action":      "query",
+                    "prop":        "pageimages",
+                    "titles":      "|".join(batch),
+                    "pithumbsize": "500",
+                    "format":      "json",
+                }
+                try:
+                    async with session.get(
+                        BASE_URL + "/api.php", params=params, headers=hdrs, timeout=timeout
+                    ) as r:
+                        if r.status != 200:
+                            continue
+                        jdata = await r.json(content_type=None)
+                        for page in jdata.get("query", {}).get("pages", {}).values():
+                            title = page.get("title", "")
+                            src   = page.get("thumbnail", {}).get("source", "")
+                            if title and src:
+                                result[title] = to_railway(_clean_wikia_url(src))
+                    await asyncio.sleep(0.2)
+                except Exception:
+                    continue
+        return result
+
     def _parse_items(html: str) -> list[tuple[str, str | None]]:
         items = []
         for li in LI_PAT.finditer(html):
@@ -734,15 +766,19 @@ async def scrape_category_brainrots(
     # ── MediaWiki API Fallback ────────────────────────────────────────────────
     # Triggered when only page 1 was scraped OR ScraperAPI returned a cached copy.
     if page <= 1 or got_stuck:
-        api_names = await _api_get_all_names()
-        api_added = 0
-        for name in api_names:
-            if name not in seen_names:
-                seen_names.add(name)
-                all_results.append((name, None))
-                api_added += 1
+        api_names  = await _api_get_all_names()
+        # Batch-fetch thumbnails via pageimages API (same endpoint, no Cloudflare)
+        new_names  = [n for n in api_names if n not in seen_names]
+        img_map    = await _api_batch_images(new_names) if new_names else {}
+        api_added  = 0
+        for name in new_names:
+            seen_names.add(name)
+            img_url = img_map.get(name)
+            all_results.append((name, img_url))
+            api_added += 1
         if on_page and api_added:
-            await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names)", None)
+            with_img = sum(1 for n in new_names if img_map.get(n))
+            await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names, {with_img} With Image)", None)
 
     return all_results
 
@@ -1176,23 +1212,15 @@ async def scrapeallbrainrots(
     for i, (name, img_url) in enumerate(to_add):
         await patch_msg(interaction, _progress(i, name))
 
-        final_url: str | None = img_url or None
-        if not final_url:
-            try:
-                wikia_url, _ = await scrape_pet_image(name)
-                if wikia_url:
-                    final_url = to_railway(wikia_url)
-            except Exception:
-                pass
-
-        if final_url:
-            data[name] = final_url
+        # img_url is pre-fetched via pageimages API — no per-pet HTTP request needed
+        if img_url:
+            data[name] = img_url
             added_ok.append(name)
             recent_done.append(title_case(name))
         else:
             no_image.append(name)
 
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.05)
 
     await patch_msg(interaction, [container(
         txt("## Pushing To GitHub..."),
