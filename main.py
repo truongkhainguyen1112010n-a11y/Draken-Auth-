@@ -529,18 +529,21 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
     next_url: str | None   = start_url
 
     async def _fetch_page(url: str) -> str | None:
-        """Fetch one category page — fresh session per call to beat Cloudflare."""
+        """Fetch one category page — fresh session per call to beat Cloudflare.
+        Validates content by checking for 'category-page__member' (real category HTML),
+        not just <!DOCTYPE>, since Cloudflare challenge pages also have DOCTYPE."""
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
+            # Attempt 1: direct fetch
             try:
                 async with session.get(url, headers=hdrs, timeout=timeout) as r:
                     body = await r.text()
-                    if r.status == 200 and ("<!DOCTYPE" in body[:500] or "<!doctype" in body[:500]):
+                    if r.status == 200 and "category-page__member" in body:
                         return body
-                    raise Exception(f"HTTP {r.status}")
             except Exception:
-                if not SCRAPER_API_KEY:
-                    return None
+                pass
+            # Attempt 2: ScraperAPI (handles Cloudflare / IP blocks)
+            if SCRAPER_API_KEY:
                 try:
                     async with session.get(
                         "https://api.scraperapi.com",
@@ -548,10 +551,46 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
                         timeout=timeout,
                     ) as r:
                         if r.status == 200:
-                            return await r.text()
+                            body = await r.text()
+                            if "category-page__member" in body:
+                                return body
                 except Exception:
                     pass
         return None
+
+    async def _api_fetch_all_names() -> list[str]:
+        """MediaWiki API fallback — bypasses Cloudflare, returns all member names as JSON.
+        Used when direct HTML scraping can't get past page 1."""
+        API_URL = "https://stealabrainrot.fandom.com/api.php"
+        names: list[str] = []
+        cont: str | None = None
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            for _ in range(20):   # safety cap
+                params: dict = {
+                    "action":      "query",
+                    "list":        "categorymembers",
+                    "cmtitle":     "Category:Listed_Brainrots",
+                    "cmlimit":     "500",
+                    "cmnamespace": "0",
+                    "format":      "json",
+                }
+                if cont:
+                    params["cmcontinue"] = cont
+                try:
+                    async with session.get(API_URL, params=params, headers=hdrs, timeout=timeout) as r:
+                        if r.status != 200:
+                            break
+                        jdata = await r.json(content_type=None)
+                        for m in jdata.get("query", {}).get("categorymembers", []):
+                            names.append(m["title"])
+                        cont = jdata.get("continue", {}).get("cmcontinue")
+                        if not cont:
+                            break
+                        await asyncio.sleep(0.3)
+                except Exception:
+                    break
+        return names
 
     while next_url and next_url not in visited_urls:
         visited_urls.add(next_url)
@@ -603,9 +642,18 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
         if next_url:
             await asyncio.sleep(0.8)   # polite delay between pages
 
-
+    # ── MediaWiki API fallback ────────────────────────────────────────────────
+    # If HTML scraping only got page 1 (Cloudflare blocked subsequent pages),
+    # use the API to get the remaining names (no images — those stay as None).
+    if len(visited_urls) <= 1:
+        api_names = await _api_fetch_all_names()
+        for name in api_names:
+            if name not in seen_names:
+                seen_names.add(name)
+                all_results.append((name, None))
 
     return all_results
+
 # ── Image Processing ──────────────────────────────────────────────────────────
 
 # ── Download & Resize ─────────────────────────────────────────────────────────
