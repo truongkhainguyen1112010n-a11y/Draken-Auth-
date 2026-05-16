@@ -349,10 +349,10 @@ async def _gh_latest_sha(filename: str, headers: dict) -> str:
 
 
 def _encode_for_file(filename: str, data: dict) -> str:
-    """Encode data as JSON for .json files, Lua table for .lua files."""
-    if filename.endswith(".json"):
+    """thumbnails1.json → JSON "name": "url"  |  thumbnails.json + *.lua → Lua ["name"] = "url"."""
+    if filename == GITHUB_JSON_FILE:   # thumbnails1.json → standard JSON
         return base64.b64encode(json.dumps(data, ensure_ascii=False, indent=2).encode()).decode()
-    return base64.b64encode(to_lua(data).encode()).decode()
+    return base64.b64encode(to_lua(data).encode()).decode()   # thumbnails.json → Lua table
 
 
 # ── Push Pets ─────────────────────────────────────────────────────────────────
@@ -577,11 +577,19 @@ async def scrape_category_brainrots() -> list[tuple[str, str | None]]:
 
                 all_results.append((name, img_url))
 
-            nm = NEXT_PAT.search(html)
-            if nm:
-                next_url = BASE_URL + nm.group(1).replace("&amp;", "&")
-            else:
-                next_url = None
+            # Find next-page link — Fandom uses ?from=Name format.
+            # findall gets ALL matches; reversed + visited_urls check picks the
+            # "next" link (last in HTML) and skips the "previous" link (first in HTML).
+            all_pg = re.findall(
+                r'href=["\'](/wiki/Category:Listed_Brainrots\?from=[^"\'&]+(?:&amp;[^"\']*)?)["\']',
+                html,
+            )
+            next_url = None
+            for candidate in reversed(all_pg):
+                full = BASE_URL + candidate.replace("&amp;", "&")
+                if full not in visited_urls:
+                    next_url = full
+                    break
 
     return all_results
 # ── Image Processing ──────────────────────────────────────────────────────────
@@ -1073,11 +1081,8 @@ async def scrapeallbrainrots(
             ),
         )]
 
-    # Send initial progress message (will be patched in-place)
-    await followup(interaction, _build_progress_msg(0, to_add[0][0] if to_add else "..."))
-
     for i, (name, img_url) in enumerate(to_add):
-        # Patch the SAME message every item for live progress
+        # Patch @original in-place — no separate followup to avoid duplicate embeds
         await patch_msg(interaction, _build_progress_msg(i, name))
 
         final_url: str | None = None
