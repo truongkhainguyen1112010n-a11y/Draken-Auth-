@@ -1354,14 +1354,11 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_dl:     list[str]             = []
     total_upload = len(to_upload)
 
-    # Send ONE progress message — patch it in-place each batch
-    await send_v2(interaction, [container(txt(f"**Uploading {total_upload} Emoji(s)...** {progress_bar(0, total_upload)}\n*Starting...*"))])
-
     async with aiohttp.ClientSession() as session:
-        total_upload = len(to_upload)
         for i in range(0, total_upload, 3):
             batch = to_upload[i:i+3]
             bar   = progress_bar(i, total_upload)
+            # patch_msg updates @original (the deferred thinking state) — same message every time
             await patch_msg(interaction, [container(
                 txt(f"**Uploading {total_upload} Emoji(s)...** {bar}"),
                 sep(),
