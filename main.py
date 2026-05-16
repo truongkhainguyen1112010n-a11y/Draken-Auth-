@@ -1994,7 +1994,7 @@ async def ensure_files():
     ]
     for filename, empty_content, is_json in files:
         check_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
-        async with (http or aiohttp.ClientSession()) as s:
+        async with aiohttp.ClientSession() as s:
             async with s.get(check_url, headers=headers) as r:
                 if r.status == 200:
                     continue    # File Already Exists — Skip
@@ -2002,12 +2002,8 @@ async def ensure_files():
                     print(f"[DK] Could not check {filename}: HTTP {r.status}")
                     continue
             # File Does Not Exist — Create It
-            encoded = base64.b64encode(empty_content.encode()).decode()
-            body    = {
-                "message": f"[DK] Init: Create {filename}",
-                "content": encoded,
-                "branch":  GITHUB_BRANCH,
-            }
+            encoded    = base64.b64encode(empty_content.encode()).decode()
+            body       = {"message": f"[DK] Init: Create {filename}", "content": encoded, "branch": GITHUB_BRANCH}
             create_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}"
             async with s.put(create_url, headers=headers, json=body) as r:
                 if r.status in (200, 201):
