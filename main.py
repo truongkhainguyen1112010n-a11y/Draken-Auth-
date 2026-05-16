@@ -1354,66 +1354,70 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_dl:     list[str]             = []
     total_upload = len(to_upload)
 
-    async with aiohttp.ClientSession() as session:
-        for i in range(0, total_upload, 3):
-            batch = to_upload[i:i+3]
+    try:
+        async with aiohttp.ClientSession() as session:
+            for i in range(0, total_upload, 3):
+                batch = to_upload[i:i+3]
+                tasks = []
+                for name, thumb in batch:
+                    async def process_one(n=name, t=thumb):
+                        img = await download_and_resize(t, session)
+                        if img is None: return ("dl_fail", n, f"Download Failed: {t[:80]}")
+                        ename       = sanitize_name(n)
+                        result, err = await upload_emoji(guild_id, bot_token, ename, img, session)
+                        if result and "id" in result:
+                            return ("ok", n, f"<:{result['name']}:{result['id']}>")
+                        return ("up_fail", n, err)
+                    tasks.append(process_one())
 
-            tasks = []
-            for name, thumb in batch:
-                async def process_one(n=name, t=thumb):
-                    img = await download_and_resize(t, session)
-                    if img is None: return ("dl_fail", n, f"Download Failed: {t[:60]}")
-                    ename       = sanitize_name(n)
-                    result, err = await upload_emoji(guild_id, bot_token, ename, img, session)
-                    if result and "id" in result:
-                        return ("ok", n, f"<:{result['name']}:{result['id']}>")
-                    return ("up_fail", n, err)
-                tasks.append(process_one())
-
-            slot_full = False
-            for res in await asyncio.gather(*tasks, return_exceptions=True):
-                if isinstance(res, Exception):
-                    failed_upload.append(f"Exception: {str(res)[:80]}")
-                elif res[0] == "ok":
-                    uploaded_ok.append((res[1], res[2]))
-                elif res[0] == "dl_fail":
-                    failed_dl.append(f"{res[1]}  {res[2]}")
-                else:
-                    err_detail = res[2] if len(res) > 2 else "Unknown Error"
-                    if err_detail == "SERVER_FULL":
-                        slot_full = True
-                        skipped_by_limit.append(res[1])
+                slot_full = False
+                for res in await asyncio.gather(*tasks, return_exceptions=True):
+                    if isinstance(res, Exception):
+                        failed_upload.append(f"Exception: {str(res)[:80]}")
+                    elif res[0] == "ok":
+                        uploaded_ok.append((res[1], res[2]))
+                    elif res[0] == "dl_fail":
+                        failed_dl.append(f"{res[1]}: {res[2]}")
                     else:
-                        failed_upload.append(f"{res[1]}  {err_detail}")
+                        err_detail = res[2] if len(res) > 2 else "Unknown"
+                        if err_detail == "SERVER_FULL":
+                            slot_full = True
+                            skipped_by_limit.append(res[1])
+                        else:
+                            failed_upload.append(f"{res[1]}: {err_detail}")
 
-            # Update progress AFTER processing batch
-            done_count = i + len(batch)
-            bar = progress_bar(done_count, total_upload)
-            await patch_msg(interaction, [container(
-                txt(f"**Uploading {total_upload} Emoji(s)...** {bar}"),
-                sep(),
-                txt(f"*Batch {i//3 + 1} / {(total_upload + 2) // 3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload) + len(failed_dl)}*"),
-            )])
-
-            if slot_full:
-                # Get Remaining Unprocessed Items
-                remaining = [n for n, _ in to_upload[i+3:]]
-                skipped_by_limit.extend(remaining)
-                await followup(interaction, [container(
-                    txt("## Server Emoji Slots Are Full"), sep(),
-                    txt(
-                        f"**Server Has Reached The Emoji Limit ({max_slots} Slots — Boost Tier {tier}).**\n\n"
-                        f"**Uploaded This Session:** {len(uploaded_ok)}\n"
-                        f"**Could Not Upload ({len(skipped_by_limit)}):**\n"
-                        + "\n".join(f" `{n}`" for n in skipped_by_limit[:30])
-                        + (f"\n*...And {len(skipped_by_limit)-30} More*" if len(skipped_by_limit) > 30 else "")
-                        + "\n\nUse `/deleteserveremojis` To Free Up Slots, Then Run `/autoemojis` Again."
-                    ),
+                # Update progress AFTER batch
+                done_count = i + len(batch)
+                await patch_msg(interaction, [container(
+                    txt(f"**Uploading {total_upload} Emoji(s)...** {progress_bar(done_count, total_upload)}"),
+                    sep(),
+                    txt(f"*Batch {i//3+1}/{(total_upload+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
                 )])
-                break
-            await asyncio.sleep(3.0)
 
-    # Step 3: Show confirm dialog — ask before saving to GitHub
+                if slot_full:
+                    remaining = [n for n, _ in to_upload[i+3:]]
+                    skipped_by_limit.extend(remaining)
+                    await followup(interaction, [container(
+                        txt("## Server Emoji Slots Are Full"), sep(),
+                        txt(
+                            f"**Server Reached Emoji Limit ({max_slots} Slots — Tier {tier}).**\n\n"
+                            f"**Uploaded:** {len(uploaded_ok)}\n"
+                            f"**Could Not Upload ({len(skipped_by_limit)}):**\n"
+                            + "\n".join(f"• `{n}`" for n in skipped_by_limit[:20])
+                            + "\n\nUse `/deleteserveremojis` To Free Up Slots."
+                        ),
+                    )])
+                    break
+                await asyncio.sleep(2.0)
+
+    except Exception as _err:
+        await followup(interaction, [container(
+            txt("## Upload Error"), sep(),
+            txt(f"**Error During Upload:**\n```\n{str(_err)[:400]}\n```\nPartially Uploaded: {len(uploaded_ok)}"),
+        )])
+        return
+
+        # Step 3: Show confirm dialog — ask before saving to GitHub
     ok_preview   = "\n".join(f"{es}  `{n}`" for n, es in uploaded_ok[:30])
     if len(uploaded_ok) > 30: ok_preview += f"\n*...And {len(uploaded_ok)-30} More*"
     all_not_done = failed_dl + list(failed_upload)
