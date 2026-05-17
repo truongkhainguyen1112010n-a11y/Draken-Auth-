@@ -882,6 +882,56 @@ async def scrape_category_brainrots(
     return all_results
 
 
+# ── New Pet Notification ──────────────────────────────────────────────────────
+
+async def notify_pet_added(name: str, url: str):
+    """Send a new-pet notification embed to the configured channel."""
+    channel_id = getattr(bot, "notify_channel_id", None)
+    if not channel_id:
+        return
+    try:
+        payload = {
+            "flags": FLAGS_V2,
+            "components": [container(
+                txt("## 🎉 New Pet Added!"),
+                sep(),
+                section(f"**{title_case(name)}**", url),
+            )],
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers={"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"},
+                json=payload,
+            ) as r:
+                await r.read()
+    except Exception:
+        pass
+
+
+# ── /Setchannel ───────────────────────────────────────────────────────────────
+
+@tree.command(name="setchannel", description="Set The Channel Where New Pet Thumbnail Notifications Will Be Sent.")
+@discord.app_commands.default_permissions(administrator=True)
+@discord.app_commands.describe(channel="Channel To Send New Pet Notifications To")
+async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    bot.notify_channel_id = channel.id
+    await interaction.response.send_message(
+        flags=FLAGS_V2,
+        components=[container(
+            txt("## Notification Channel Set"),
+            sep(),
+            txt(
+                f"**Channel:** {channel.mention}\n\n"
+                f"New Pet Thumbnails Added Via `/addpet`, `/fetchpet`, Or `/scrapeallbrainrots` "
+                f"Will Now Be Announced Here."
+            ),
+            sep(),
+            txt(f"**Channel ID:** `{channel.id}`"),
+        )],
+    )
+
+
 # ── /Ping ─────────────────────────────────────────────────────────────────────
 
 @tree.command(name="ping", description="Check The Bot's Latency And Connection Status.")
@@ -896,9 +946,9 @@ async def ping(interaction: discord.Interaction):
         txt("## Pong"),
         sep(),
         txt(f"**Websocket Latency:** `{ws_ms}ms`"),
-        sep_sm(),
+        sep(),
         txt(f"**Response Time:** `{latency_ms}ms`"),
-        sep_sm(),
+        sep(),
         txt(f"**Status:** {status}"),
     )])
 
@@ -925,7 +975,7 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
             txt(f"**Current URL:**\n```\n{shorten(exist, 240)}\n```"),
             sep(),
             txt(f"**New URL You Tried:**\n```\n{shorten(converted, 240)}\n```"),
-            sep_sm(),
+            sep(),
             txt("Use `/updatepet` To Change The URL."),
         )])
         return
@@ -944,6 +994,7 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
         txt(f"**URL:**\n```\n{shorten(converted)}\n```"),
         sep(),
         txt("**GitHub** — Pushed & Sorted A To Z"))])
+        await notify_pet_added(name, converted)
     else:
         await send_v2(interaction, [container(txt("## Failed To Add Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub**  Push Failed\n```\n{err[:200]}\n```"))])
 
@@ -1009,11 +1060,12 @@ async def deletepet(interaction: discord.Interaction, name: str):
             container(
                 txt("## Confirm Delete Pet"),
                 sep(),
-                section(f"**{name}**", deleted_url),
+                section(f"**{title_case(name)}**", deleted_url),
                 sep(),
                 txt(f"**URL:**\n```\n{shorten(deleted_url, 200)}\n```"),
-                sep_sm(),
-                txt("Are You Sure You Want To Delete This Pet?"),
+                sep(),
+                txt("⚠️ **Are You Sure You Want To Delete This Pet?**"),
+                sep(),
                 action_row(btn_yes(f"delpet_yes:{name}"), btn_no("delpet_no")),
             ),
         ],
@@ -1144,8 +1196,14 @@ async def fetchpet(interaction: discord.Interaction, name: str):
             "flags": FLAGS_V2,
             "components": [
                 container(
-                    txt("## Pet Already Exists"), sep(),
-                    section(f"**{name}**\n\nAlready In GitHub  Overwrite?\n\n**Current URL:**\n```\n{shorten(existing_url)}\n```\n\n**Fetched URL:**\n```\n{short_url}\n```", existing_url),
+                    txt("## Pet Already Exists"),
+                    sep(),
+                    section(f"**{title_case(name)}**\n\nAlready In GitHub — Overwrite?", existing_url),
+                    sep(),
+                    txt(f"**Current URL:**\n```\n{shorten(existing_url)}\n```"),
+                    sep(),
+                    txt(f"**Fetched URL:**\n```\n{shorten(short_url)}\n```"),
+                    sep(),
                     action_row(btn_yes(f"overwrite_yes:{name}"), btn_no(f"overwrite_no:{name}")),
                 ),
             ],
@@ -1169,6 +1227,7 @@ async def fetchpet(interaction: discord.Interaction, name: str):
             txt(f"**Wiki URL:**\n```\n{short_url}\n```"),
             sep(),
             txt("**Save This Pet To GitHub?**"),
+            sep(),
             action_row(
                 btn("Save To GitHub", f"fetchpet_save:{key}", style=2),
                 btn("Discard",        f"fetchpet_discard:{key}", style=2),
@@ -1203,8 +1262,12 @@ async def syncpets(interaction: discord.Interaction):
         "flags": FLAGS_V2,
         "components": [
             container(
-                txt("## Sync Pets"), sep(),
-                txt(f"**Total Pets:** {len(data)}\n**Found {len(needs_sync)} Pet(s) Not Synced:**\n\n{preview_lines}{more_note}\n\nConvert All?"),
+                txt("## Sync Pets"),
+                sep(),
+                txt(f"**Total Pets:** {len(data)}\n**Found {len(needs_sync)} Pet(s) Not Synced:**\n\n{preview_lines}{more_note}"),
+                sep(),
+                txt("**Convert All To Railway Proxy Format?**"),
+                sep(),
                 action_row(btn_yes("syncpets_yes"), btn_no("syncpets_no")),
             ),
         ],
@@ -1340,6 +1403,7 @@ async def scrapeallbrainrots(
             data[name] = final_url
             added_ok.append(name)
             recent_done.append(title_case(name))
+            await notify_pet_added(name, final_url)
         else:
             no_image.append(name)
 
@@ -1599,8 +1663,12 @@ async def clearemojis(interaction: discord.Interaction, target: str = "all"):
         "flags": FLAGS_V2,
         "components": [
             container(
-                txt("## Confirm Clear Emoji IDs"), sep(),
-                txt(f"**About To Clear All Emoji IDs In:**\n {files_desc.get(target, target)}\n\n**This Action Cannot Be Undone!**\nAre You Sure?"),
+                txt("## Confirm Clear Emoji IDs"),
+                sep(),
+                txt(f"**About To Clear All Emoji IDs In:**\n{files_desc.get(target, target)}"),
+                sep(),
+                txt("⚠️ **This Action Cannot Be Undone — Are You Sure?**"),
+                sep(),
                 action_row(btn_yes(f"clearemojis_yes:{target}"), btn_no("clearemojis_no")),
             ),
         ],
@@ -1736,7 +1804,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
             bar   = progress_bar(i, len(to_upload))
             await followup(interaction, [container(
                 txt(f"**Uploading {len(to_upload)} Emoji(s)...** {bar}"),
-                sep_sm(),
+                sep(),
                 txt(f"*Batch {i//3+1}/{(len(to_upload)+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
             )])
 
@@ -1816,8 +1884,9 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
             ),
             sep(),
             txt("**Save These Emojis To GitHub?**"),
-            sep_sm(),
+            sep(),
             txt("`traits.lua` + `mutations.lua` Will Be Updated."),
+            sep(),
             action_row(
                 btn("Save To GitHub", f"autoemoji_save:{akey}", style=2),
                 btn("Discard",        f"autoemoji_discard:{akey}", style=2),
@@ -1951,9 +2020,10 @@ async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"
                 sep(),
                 txt(f"**Mode:** `{'All Emojis In Server' if mode == 'all' else 'Only Bot-Uploaded Emojis'}`"),
                 sep(),
-                txt(f"**This Will Permanently Delete Emojis From `{interaction.guild.name}`!**\nThis Action **Cannot Be Undone**."),
-                sep_sm(),
-                txt("Are You Sure You Want To Continue?"),
+                txt(f"⚠️ **This Will Permanently Delete Emojis From `{interaction.guild.name}`!**\nThis Action Cannot Be Undone."),
+                sep(),
+                txt("**Are You Sure You Want To Continue?**"),
+                sep(),
                 action_row(btn_yes(f"delserver_yes:{mode}"), btn_no("delserver_no")),
             ),
         ],
@@ -2013,6 +2083,7 @@ async def on_interaction(interaction: discord.Interaction):
         extra = f"\n\n**Previous URL:**\n```\n{shorten(old_url, 200)}\n```" if old_url else ""
         if ok:
             await patch_msg(interaction, [container(txt("## Pet Image Updated Successfully"), sep(), section(f"**{pet_name}**\n\n**Railway URL:**\n```\n{shorten(railway_url)}\n```{extra}", railway_url), sep(), txt("**GitHub**  Pushed & Sorted A To Z"))])
+            await notify_pet_added(pet_name, railway_url)
         else:
             await patch_msg(interaction, [container(txt("## Failed To Save Pet"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
 
@@ -2185,6 +2256,7 @@ async def on_interaction(interaction: discord.Interaction):
                 sep(),
                 txt("**GitHub** — Pushed & Sorted A To Z"),
             )])
+            await notify_pet_added(name, railway_url)
         except Exception as e:
             await patch_msg(interaction, [container(txt("## Save Failed"), sep(), txt(f"**Error:**\n```\n{str(e)[:200]}\n```"))])
 
