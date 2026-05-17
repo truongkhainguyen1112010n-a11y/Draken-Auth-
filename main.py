@@ -210,7 +210,43 @@ def _clean_wikia_url(url: str) -> str:
     return url
 
 
-# ── Proxy Wrapper ─────────────────────────────────────────────────────────────
+# ── MediaWiki Batch Image Fetcher ──────────────────────────────────────────────
+# Uses prop=pageimages — same /api.php endpoint that bypasses Cloudflare.
+# Returns {name: railway_url} for all names with images found.
+
+async def api_batch_images(names: list[str]) -> dict[str, str]:
+    """Batch-fetch thumbnail URLs via MediaWiki prop=pageimages (no Cloudflare).
+    Processes 50 titles per request. Returns {title: railway_url}."""
+    BASE     = "https://stealabrainrot.fandom.com/api.php"
+    hdrs     = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
+    timeout  = aiohttp.ClientTimeout(total=30)
+    result:  dict[str, str] = {}
+    connector = aiohttp.TCPConnector(force_close=True)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        for i in range(0, len(names), 50):
+            batch  = names[i:i + 50]
+            params = {
+                "action": "query", "prop": "pageimages",
+                "titles": "|".join(batch),
+                "pithumbsize": "500", "format": "json",
+            }
+            try:
+                async with session.get(BASE, params=params, headers=hdrs, timeout=timeout) as r:
+                    if r.status != 200:
+                        continue
+                    jdata = await r.json(content_type=None)
+                    for page in jdata.get("query", {}).get("pages", {}).values():
+                        title = page.get("title", "")
+                        src   = page.get("thumbnail", {}).get("source", "")
+                        if title and src:
+                            result[title] = to_railway(_clean_wikia_url(src))
+                await asyncio.sleep(0.2)
+            except Exception:
+                continue
+    return result
+
+
+
 
 def via_proxy(url: str) -> str:
     """Proxy any image URL through Railway with auto resize."""
@@ -483,21 +519,62 @@ def _best_wikia_img(cell_html: str) -> str | None:
 
 async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
     timeout = aiohttp.ClientTimeout(total=40)
-    hdrs    = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
-    connector = aiohttp.TCPConnector(force_close=True)
-    async with aiohttp.ClientSession(connector=connector) as session:
+    hdrs    = {
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    html: str | None = None
+
+    # ── Attempt 1: urllib via thread (bypasses Cloudflare IP block) ───────────
+    loop = asyncio.get_event_loop()
+    def _urllib_get(url: str) -> str | None:
+        import urllib.request as _ur
         try:
-            async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
-                if r.status == 200 and "<!DOCTYPE" in (body := await r.text()): html = body
-                else: raise Exception(f"Blocked ({r.status})")
+            req = _ur.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
+                "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            })
+            with _ur.urlopen(req, timeout=30) as r:
+                body = r.read().decode("utf-8", errors="replace")
+                return body if "<!DOCTYPE" in body[:500] or "<!doctype" in body[:500] else None
         except Exception:
-            async with session.get(
-                "https://api.scraperapi.com",
-                params={"api_key": SCRAPER_API_KEY, "url": page_url, "render": "false"},
-                timeout=timeout,
-            ) as r:
-                if r.status != 200: return []
-                html = await r.text()
+            return None
+
+    try:
+        body = await loop.run_in_executor(None, _urllib_get, page_url)
+        if body:
+            html = body
+    except Exception:
+        pass
+
+    # ── Attempt 2: aiohttp direct ─────────────────────────────────────────────
+    if not html:
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            try:
+                async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
+                    body = await r.text()
+                    if r.status == 200 and "<!DOCTYPE" in body[:500]:
+                        html = body
+            except Exception:
+                pass
+
+            # ── Attempt 3: ScraperAPI ─────────────────────────────────────────
+            if not html and SCRAPER_API_KEY:
+                try:
+                    async with session.get(
+                        "https://api.scraperapi.com",
+                        params={"api_key": SCRAPER_API_KEY, "url": page_url, "render": "false"},
+                        timeout=timeout,
+                    ) as r:
+                        if r.status == 200:
+                            html = await r.text()
+                except Exception:
+                    pass
+
+    if not html:
+        return []
 
     def clean(s): return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', s)).strip()
 
@@ -769,7 +846,7 @@ async def scrape_category_brainrots(
         api_names  = await _api_get_all_names()
         # Batch-fetch thumbnails via pageimages API (same endpoint, no Cloudflare)
         new_names  = [n for n in api_names if n not in seen_names]
-        img_map    = await _api_batch_images(new_names) if new_names else {}
+        img_map    = await api_batch_images(new_names) if new_names else {}
         api_added  = 0
         for name in new_names:
             seen_names.add(name)
@@ -2256,6 +2333,15 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
     fetched_ok:   list[str] = []
     fetch_failed: list[str] = []
 
+    # ── Step 1: Batch-fetch images via MediaWiki API (no Cloudflare) ──────────
+    await patch_msg(interaction, [container(
+        txt("## Refetching All Pets..."),
+        sep(),
+        txt(f"**Fetching Images Via Wiki API...**\n**Total:** {len(to_fetch)} Pets"),
+    )])
+    img_map = await api_batch_images(to_fetch)
+
+    # ── Step 2: Apply results + scrape_pet_image fallback for misses ──────────
     for i, name in enumerate(to_fetch):
         await patch_msg(interaction, [container(
             txt("## Refetching All Pets..."),
@@ -2266,16 +2352,23 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
                 f"**Success:** {len(fetched_ok)}    **Failed:** {len(fetch_failed)}"
             ),
         )])
-        try:
-            wikia_url, _ = await scrape_pet_image(name)
-            if wikia_url:
-                data[name] = to_railway(wikia_url)
-                fetched_ok.append(name)
-            else:
-                fetch_failed.append(name)
-        except Exception:
+
+        url = img_map.get(name)
+        if not url:
+            # Fallback: try scrape_pet_image for the few misses
+            try:
+                wikia_url, _ = await scrape_pet_image(name)
+                if wikia_url:
+                    url = to_railway(wikia_url)
+            except Exception:
+                pass
+
+        if url:
+            data[name] = url
+            fetched_ok.append(name)
+        else:
             fetch_failed.append(name)
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.05)
 
     await patch_msg(interaction, [container(
         txt("## Pushing To GitHub..."),
