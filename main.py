@@ -915,21 +915,19 @@ async def notify_pet_added(name: str, url: str):
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(channel="Channel To Send New Pet Notifications To")
 async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(thinking=True)
     bot.notify_channel_id = channel.id
-    await interaction.response.send_message(
-        flags=FLAGS_V2,
-        components=[container(
-            txt("## Notification Channel Set"),
-            sep(),
-            txt(
-                f"**Channel:** {channel.mention}\n\n"
-                f"New Pet Thumbnails Added Via `/addpet`, `/fetchpet`, Or `/scrapeallbrainrots` "
-                f"Will Now Be Announced Here."
-            ),
-            sep(),
-            txt(f"**Channel ID:** `{channel.id}`"),
-        )],
-    )
+    await send_v2(interaction, [container(
+        txt("## Notification Channel Set"),
+        sep(),
+        txt(
+            f"**Channel:** {channel.mention}\n\n"
+            f"New Pet Thumbnails Added Via `/addpet`, `/fetchpet`, Or `/scrapeallbrainrots` "
+            f"Will Now Be Announced Here."
+        ),
+        sep(),
+        txt(f"**Channel ID:** `{channel.id}`"),
+    )])
 
 
 # ── /Ping ─────────────────────────────────────────────────────────────────────
