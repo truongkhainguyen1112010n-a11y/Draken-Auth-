@@ -518,40 +518,54 @@ def _best_wikia_img(cell_html: str) -> str | None:
 
 
 async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
+    """
+    Fetch a wiki table page via MediaWiki action=parse API (bypasses Cloudflare).
+    Falls back to direct urllib fetch, then aiohttp, then ScraperAPI.
+    """
+    BASE    = "https://stealabrainrot.fandom.com/api.php"
+    slug    = urllib.parse.unquote(page_url.split("/wiki/")[-1])
     timeout = aiohttp.ClientTimeout(total=40)
     hdrs    = {
         "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
         "Accept-Encoding": "gzip, deflate",
-        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
     html: str | None = None
 
-    # ── Attempt 1: urllib via thread (bypasses Cloudflare IP block) ───────────
-    loop = asyncio.get_event_loop()
-    def _urllib_get(url: str) -> str | None:
-        import urllib.request as _ur
+    # ── Attempt 1: MediaWiki parse API (no Cloudflare) ────────────────────────
+    connector = aiohttp.TCPConnector(force_close=True)
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
-            req = _ur.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0",
-                "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            })
-            with _ur.urlopen(req, timeout=30) as r:
-                body = r.read().decode("utf-8", errors="replace")
-                return body if "<!DOCTYPE" in body[:500] or "<!doctype" in body[:500] else None
+            async with session.get(
+                BASE,
+                params={"action": "parse", "page": slug, "format": "json", "prop": "text"},
+                headers=hdrs,
+                timeout=timeout,
+            ) as r:
+                if r.status == 200:
+                    jdata = await r.json(content_type=None)
+                    html  = jdata.get("parse", {}).get("text", {}).get("*")
         except Exception:
-            return None
+            pass
 
-    try:
-        body = await loop.run_in_executor(None, _urllib_get, page_url)
-        if body:
-            html = body
-    except Exception:
-        pass
+        # ── Attempt 2: urllib via thread ─────────────────────────────────────
+        if not html:
+            loop = asyncio.get_event_loop()
+            def _urllib_get(url: str) -> str | None:
+                import urllib.request as _ur
+                try:
+                    req = _ur.Request(url, headers={"User-Agent": hdrs["User-Agent"]})
+                    with _ur.urlopen(req, timeout=30) as r:
+                        body = r.read().decode("utf-8", errors="replace")
+                        return body if "<!DOCTYPE" in body[:500] or "<!doctype" in body[:500] else None
+                except Exception:
+                    return None
+            try:
+                html = await loop.run_in_executor(None, _urllib_get, page_url)
+            except Exception:
+                pass
 
-    # ── Attempt 2: aiohttp direct ─────────────────────────────────────────────
-    if not html:
-        connector = aiohttp.TCPConnector(force_close=True)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        # ── Attempt 3: aiohttp direct ─────────────────────────────────────────
+        if not html:
             try:
                 async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
                     body = await r.text()
@@ -560,32 +574,32 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
             except Exception:
                 pass
 
-            # ── Attempt 3: ScraperAPI ─────────────────────────────────────────
-            if not html and SCRAPER_API_KEY:
-                try:
-                    async with session.get(
-                        "https://api.scraperapi.com",
-                        params={"api_key": SCRAPER_API_KEY, "url": page_url, "render": "false"},
-                        timeout=timeout,
-                    ) as r:
-                        if r.status == 200:
-                            html = await r.text()
-                except Exception:
-                    pass
+        # ── Attempt 4: ScraperAPI ─────────────────────────────────────────────
+        if not html and SCRAPER_API_KEY:
+            try:
+                async with session.get(
+                    "https://api.scraperapi.com",
+                    params={"api_key": SCRAPER_API_KEY, "url": page_url, "render": "false"},
+                    timeout=timeout,
+                ) as r:
+                    if r.status == 200:
+                        html = await r.text()
+            except Exception:
+                pass
 
     if not html:
         return []
 
-    def clean(s): return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', s)).strip()
+    def clean(s): return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", s)).strip()
 
     NAME_COL = 1
     ICON_COL = 3
-    row_pat  = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL | re.IGNORECASE)
-    td_pat   = re.compile(r'<td[^>]*>(.*?)</td>',  re.DOTALL | re.IGNORECASE)
-    th_pat   = re.compile(r'<th[^>]*>(.*?)</th>',  re.DOTALL | re.IGNORECASE)
+    row_pat  = re.compile(r"<tr[^>]*>(.*?)</tr>",  re.DOTALL | re.IGNORECASE)
+    td_pat   = re.compile(r"<td[^>]*>(.*?)</td>",   re.DOTALL | re.IGNORECASE)
+    th_pat   = re.compile(r"<th[^>]*>(.*?)</th>",   re.DOTALL | re.IGNORECASE)
 
-    entries    = []
-    seen_names = set()
+    entries:    list[tuple[str, str | None]] = []
+    seen_names: set[str] = set()
 
     for row_m in row_pat.finditer(html):
         row_html = row_m.group(1)
@@ -593,25 +607,33 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
         if ths:
             headers = [clean(h).lower() for h in ths]
             for i, h in enumerate(headers):
-                if h == 'name': NAME_COL = i
-                if h in ('icon', 'image', 'img'): ICON_COL = i
+                if h == "name":                     NAME_COL = i
+                if h in ("icon", "image", "img"):  ICON_COL = i
             continue
         cells = td_pat.findall(row_html)
-        if len(cells) <= max(NAME_COL, ICON_COL): continue
+        if len(cells) <= max(NAME_COL, ICON_COL):
+            continue
         name = clean(cells[NAME_COL])
-        if not name or name.lower() in ('name', 'multi', 'icon', 'image', 'rarity', 'effect', 'description', ''): continue
-        if name in seen_names: continue
+        skip = {"name", "multi", "icon", "image", "rarity", "effect", "description", ""}
+        if not name or name.lower() in skip:
+            continue
+        if name in seen_names:
+            continue
         seen_names.add(name)
         thumb = _best_wikia_img(cells[ICON_COL])
         if not thumb:
             for cell in cells:
                 thumb = _best_wikia_img(cell)
-                if thumb: break
+                if thumb:
+                    break
         if not thumb:
-            all_wikia = re.findall(r'https://static\.wikia\.nocookie\.net/[^"\'>\s]+\.(?:png|jpg|webp|gif)', row_html, re.IGNORECASE)
+            all_wikia = re.findall(
+                r'https://static\.wikia\.nocookie\.net/[^"\'>\s]+\.(?:png|jpg|webp|gif)',
+                row_html, re.IGNORECASE,
+            )
             for u in all_wikia:
-                if not any(x in u.lower() for x in ['placeholder','wordmark','fandom','favicon']):
-                    thumb = to_railway(re.sub(r'/revision/latest.*', '', u).split('?')[0])
+                if not any(x in u.lower() for x in ["placeholder", "wordmark", "fandom", "favicon"]):
+                    thumb = to_railway(re.sub(r"/revision/latest.*", "", u).split("?")[0])
                     break
         entries.append((name, thumb))
 
@@ -1088,15 +1110,29 @@ async def listpets(interaction: discord.Interaction):
 @discord.app_commands.default_permissions(administrator=True)
 async def fetchpet(interaction: discord.Interaction, name: str):
     await interaction.response.defer(thinking=True)
-    try:
-        wikia_url, debug_info = await scrape_pet_image(name)
-    except Exception as e:
-        await send_v2(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Pet:** `{name}`\n\n**Exception:**\n```\n{e}\n```"))]); return
-    if not wikia_url:
+
+    # Use batch images API (no Cloudflare) to fetch single pet image
+    img_map = await api_batch_images([name])
+    railway_url = img_map.get(name)
+
+    # Fallback: scrape_pet_image for edge cases
+    if not railway_url:
+        try:
+            wikia_url, debug_info = await scrape_pet_image(name)
+            if wikia_url:
+                railway_url = to_railway(wikia_url)
+        except Exception as e:
+            await send_v2(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Pet:** `{name}`\n\n**Exception:**\n```\n{e}\n```"))]); return
+
+    if not railway_url:
         page_url = FANDOM_BASE + quote(name.replace(" ", "_"))
-        await send_v2(interaction, [container(txt("## Image Not Found On Wiki"), sep(), txt(f"**Pet:** `{name}`\n\n No Image Found On The Wiki Page.\n\n**Page Checked:**\n```\n{page_url}\n```\n\n**Debug Info:**\n```\n{debug_info[:600]}\n```"))]); return
-    railway_url = to_railway(wikia_url)
-    short_url   = shorten(railway_url)
+        await send_v2(interaction, [container(
+            txt("## Image Not Found On Wiki"),
+            sep(),
+            txt(f"**Pet:** `{name}`\n\nNo Image Found On The Wiki Page.\n\n**Page Checked:**\n```\n{page_url}\n```"),
+        )]); return
+
+    short_url = shorten(railway_url)
     try:
         data, sha = await fetch_pets()
     except Exception as e:
@@ -2005,14 +2041,19 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as ce:
                 failed_list.append(f"{cname}: {ce}")
             done += 1
+        # Batch-fetch images for re-fetch list via API (no Cloudflare)
+        refetch_img_map = await api_batch_images(list(to_refetch)) if to_refetch else {}
         for cname in to_refetch:
             await patch_msg(interaction, [container(txt("## Syncing..."), sep(), txt(f"**Progress:** {progress_bar(done, total)}\n\n**Processing:** `{cname}` *(Re-Fetch)*"))])
-            try:
-                wikia_url, _ = await scrape_pet_image(cname)
-                if wikia_url: data[cname] = to_railway(wikia_url); converted_list.append(cname)
-                else:         failed_list.append(f"{cname}: Wiki Image Not Found")
-            except Exception as ce:
-                failed_list.append(f"{cname}: {ce}")
+            url = refetch_img_map.get(cname)
+            if not url:
+                try:
+                    wikia_url, _ = await scrape_pet_image(cname)
+                    if wikia_url: url = to_railway(wikia_url)
+                except Exception:
+                    pass
+            if url: data[cname] = url; converted_list.append(cname)
+            else:   failed_list.append(f"{cname}: Image Not Found")
             done += 1
         try:
             await push_pets(data, sha, f"[DK] SyncPets: Converted {len(converted_list)} URLs")
@@ -2232,28 +2273,41 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
     fixed_ok:   list[str] = []
     still_fail: list[str] = []
     broken_list = sorted(broken.items())
+    broken_names = [n for n, _ in broken_list]
 
-    for i, (name, old_url) in enumerate(broken_list):
+    # ── Batch-fetch images via MediaWiki API (no Cloudflare) ─────────────────
+    await patch_msg(interaction, [container(
+        txt("## Refetching Broken Images..."),
+        sep(),
+        txt(f"**Fetching Images Via Wiki API...**\n**Broken Pets:** {len(broken_list)}"),
+    )])
+    img_map = await api_batch_images(broken_names)
+
+    # ── Apply results, scrape_pet_image fallback for misses ───────────────────
+    for i, (name, _) in enumerate(broken_list):
         await patch_msg(interaction, [container(
             txt("## Refetching Broken Images..."),
             sep(),
             txt(
                 f"**Progress:** {progress_bar(i, len(broken_list))}\n"
                 f"**Processing:** `{title_case(name)}`\n\n"
-                f"**Fixed:** {len(fixed_ok)}    **Still Broken:** {len(still_fail)}"
+                f"**Fixed:** {len(fixed_ok)}   **Still Broken:** {len(still_fail)}"
             ),
         )])
-        try:
-            wikia_url, _ = await scrape_pet_image(name)
-            if wikia_url:
-                new_url = to_railway(wikia_url)
-                data[name] = new_url
-                fixed_ok.append(name)
-            else:
-                still_fail.append(name)
-        except Exception:
+        url = img_map.get(name)
+        if not url:
+            try:
+                wikia_url, _ = await scrape_pet_image(name)
+                if wikia_url:
+                    url = to_railway(wikia_url)
+            except Exception:
+                pass
+        if url:
+            data[name] = url
+            fixed_ok.append(name)
+        else:
             still_fail.append(name)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.05)
 
     # Final 100% patch
     await patch_msg(interaction, [container(
