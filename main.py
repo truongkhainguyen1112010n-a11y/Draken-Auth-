@@ -37,6 +37,7 @@ FANDOM_BASE           = "https://stealabrainrot.fandom.com/wiki/"
 # ── Discord & Bot Settings ────────────────────────────────────────────────────
 
 FLAGS_V2              = 32768
+FLAGS_V2_EPH          = 32768 | 64   # Components V2 + Ephemeral (only visible to invoker)
 OWNER_ID              = 1498384419805986886
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -153,17 +154,18 @@ def webhook_url(interaction: discord.Interaction) -> str:
 
 # ── Send & Followup ───────────────────────────────────────────────────────────
 
-async def send_v2(interaction: discord.Interaction, components: list[dict]):
-    url = webhook_url(interaction)
+async def send_v2(interaction: discord.Interaction, components: list[dict], eph: bool = True):
+    url   = webhook_url(interaction)
+    flags = FLAGS_V2_EPH if eph else FLAGS_V2
     async with aiohttp.ClientSession() as s:
-        async with s.post(url, json={"flags": FLAGS_V2, "components": components}) as r:
+        async with s.post(url, json={"flags": flags, "components": components}) as r:
             if r.status not in (200, 204):
                 raise Exception(f"Discord {r.status}: {(await r.text())[:200]}")
 
 
-async def followup(interaction: discord.Interaction, components: list[dict]):
+async def followup(interaction: discord.Interaction, components: list[dict], eph: bool = True):
     url     = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
-    payload = {"flags": FLAGS_V2, "components": components}
+    payload = {"flags": FLAGS_V2_EPH if eph else FLAGS_V2, "components": components}
     for _ in range(5):
         async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload) as r:
@@ -181,10 +183,11 @@ async def followup(interaction: discord.Interaction, components: list[dict]):
 
 # ── Patch Message ─────────────────────────────────────────────────────────────
 
-async def patch_msg(interaction: discord.Interaction, components: list[dict]):
-    url = f"{webhook_url(interaction)}/messages/@original"
+async def patch_msg(interaction: discord.Interaction, components: list[dict], eph: bool = True):
+    url   = f"{webhook_url(interaction)}/messages/@original"
+    flags = FLAGS_V2_EPH if eph else FLAGS_V2
     async with aiohttp.ClientSession() as s:
-        async with s.patch(url, json={"flags": FLAGS_V2, "components": components}) as r:
+        async with s.patch(url, json={"flags": flags, "components": components}) as r:
             await r.read()   # consume body so the connection is properly released
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
@@ -891,9 +894,9 @@ async def notify_pet_added(name: str, url: str):
         return
     try:
         payload = {
-            "flags": FLAGS_V2,
+            "flags": FLAGS_V2,   # Public — not ephemeral
             "components": [container(
-                txt("## 🎉 New Pet Added!"),
+                txt("## Draken Notifier"),
                 sep(),
                 section(f"**{title_case(name)}**", url),
             )],
@@ -915,7 +918,7 @@ async def notify_pet_added(name: str, url: str):
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(channel="Channel To Send New Pet Notifications To")
 async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     bot.notify_channel_id = channel.id
     await send_v2(interaction, [container(
         txt("## Notification Channel Set"),
@@ -936,7 +939,7 @@ async def setchannel(interaction: discord.Interaction, channel: discord.TextChan
 @discord.app_commands.default_permissions(administrator=True)
 async def ping(interaction: discord.Interaction):
     start = time.monotonic()
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     latency_ms = round((time.monotonic() - start) * 1000)
     ws_ms      = round(bot.latency * 1000)
     status     = "Excellent" if ws_ms < 80 else "Normal" if ws_ms < 150 else "Slow"
@@ -955,7 +958,7 @@ async def ping(interaction: discord.Interaction):
 @tree.command(name="addpet", description="Add A New Pet With Its Thumbnail URL To GitHub.")
 @discord.app_commands.default_permissions(administrator=True)
 async def addpet(interaction: discord.Interaction, name: str, url: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     converted = to_railway(url)
     label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
     try:
@@ -1001,7 +1004,7 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
 @tree.command(name="updatepet", description="Update The Thumbnail URL Of An Existing Pet.")
 @discord.app_commands.default_permissions(administrator=True)
 async def updatepet(interaction: discord.Interaction, name: str, url: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     converted = to_railway(url)
     label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
     try:
@@ -1039,7 +1042,7 @@ async def updatepet(interaction: discord.Interaction, name: str, url: str):
 @tree.command(name="deletepet", description="Delete A Pet And Its Thumbnail URL From GitHub.")
 @discord.app_commands.default_permissions(administrator=True)
 async def deletepet(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         data, sha = await fetch_pets()
     except Exception as e:
@@ -1079,7 +1082,7 @@ async def deletepet(interaction: discord.Interaction, name: str):
 @tree.command(name="getpet", description="Get The Thumbnail URL Of A Specific Pet.")
 @discord.app_commands.default_permissions(administrator=True)
 async def getpet(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         data, _ = await fetch_pets()
     except Exception as e:
@@ -1101,7 +1104,7 @@ async def getpet(interaction: discord.Interaction, name: str):
 @tree.command(name="searchpet", description="Search For Pets By Name Or Keyword.")
 @discord.app_commands.default_permissions(administrator=True)
 async def searchpet(interaction: discord.Interaction, query: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         data, _ = await fetch_pets()
     except Exception as e:
@@ -1128,7 +1131,7 @@ async def searchpet(interaction: discord.Interaction, query: str):
 @tree.command(name="listpets", description="List All Pets And Their Thumbnails Stored In GitHub.")
 @discord.app_commands.default_permissions(administrator=True)
 async def listpets(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         data, _ = await fetch_pets()
     except Exception as e:
@@ -1159,7 +1162,7 @@ async def listpets(interaction: discord.Interaction):
 @tree.command(name="fetchpet", description="Auto-Fetch A Pet's Image From The Fandom Wiki And Save It.")
 @discord.app_commands.default_permissions(administrator=True)
 async def fetchpet(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
     # Use batch images API (no Cloudflare) to fetch single pet image
     img_map = await api_batch_images([name])
@@ -1243,7 +1246,7 @@ async def fetchpet(interaction: discord.Interaction, name: str):
 @tree.command(name="syncpets", description="Sync All Pet URLs To Railway Proxy Format.")
 @discord.app_commands.default_permissions(administrator=True)
 async def syncpets(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         data, sha = await fetch_pets()
     except Exception as e:
@@ -1290,7 +1293,7 @@ async def scrapeallbrainrots(
     skip_existing: bool = True,
     dry_run:       bool = False,
 ):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
     # ── Step 1 / 3 — Load GitHub ─────────────────────────────────────────────
     await send_v2(interaction, [container(
@@ -1448,7 +1451,7 @@ async def scrapeallbrainrots(
 @tree.command(name="listmutations", description="Scrape & List All Mutations From The Fandom Wiki With Thumbnails.")
 @discord.app_commands.default_permissions(administrator=True)
 async def listmutations(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await followup(interaction, [container(txt("##  Scanning Mutations Wiki Page..."), sep(), txt(" Scraping `stealabrainrot.fandom.com/wiki/Mutations`  Please Wait..."))])
     try:
         mutations = await scrape_mutations()
@@ -1474,7 +1477,7 @@ async def listmutations(interaction: discord.Interaction):
 @tree.command(name="listtraits", description="Scrape & List All Traits From The Fandom Wiki With Thumbnails.")
 @discord.app_commands.default_permissions(administrator=True)
 async def listtraits(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await followup(interaction, [container(txt("## Scanning Traits Wiki Page..."), sep(), txt(" Scraping `stealabrainrot.fandom.com/wiki/Traits`  Please Wait..."))])
     try:
         traits = await scrape_traits()
@@ -1500,7 +1503,7 @@ async def listtraits(interaction: discord.Interaction):
 @tree.command(name="getemojis", description="Get All Trait & Mutation Names From Wiki With Emoji Mapping Status.")
 @discord.app_commands.default_permissions(administrator=True)
 async def getemojis(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await followup(interaction, [container(txt("## Scanning Wiki For Names..."), sep(), txt("Scraping Traits & Mutations Pages  Please Wait..."))])
     try:
         traits, mutations = await asyncio.gather(scrape_traits(), scrape_mutations())
@@ -1543,7 +1546,7 @@ async def getemojis(interaction: discord.Interaction):
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(emoji_data="Paste Lines Of  name:emoji_id  Or  <:name:id>  (One Per Line)")
 async def addemojis(interaction: discord.Interaction, emoji_data: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     parsed = parse_emoji_input(emoji_data)
     if not parsed:
         await send_v2(interaction, [container(txt("## No Valid Emojis Parsed"), sep(), txt("**Accepted Formats (One Per Line):**\n```\nDefault:1498945977409863751\n<:Default:1498945977409863751>\n```"))]); return
@@ -1590,7 +1593,7 @@ async def addemojis(interaction: discord.Interaction, emoji_data: str):
 @tree.command(name="listemojis", description="List All Saved Emoji Mappings From GitHub.")
 @discord.app_commands.default_permissions(administrator=True)
 async def listemojis(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         t_data, _ = await gh_fetch(GITHUB_TRAITS_FILE)
         m_data, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
@@ -1613,7 +1616,7 @@ async def listemojis(interaction: discord.Interaction):
 @tree.command(name="deleteemoji", description="Delete An Emoji Mapping From GitHub.")
 @discord.app_commands.default_permissions(administrator=True)
 async def deleteemoji(interaction: discord.Interaction, name: str):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         t_data, t_sha = await gh_fetch(GITHUB_TRAITS_FILE)
         m_data, m_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
@@ -1650,7 +1653,7 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
     discord.app_commands.Choice(name="traits.lua + mutations.lua",    value="both"),
 ])
 async def clearemojis(interaction: discord.Interaction, target: str = "all"):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     files_desc = {
         "traits":    f"`{GITHUB_TRAITS_FILE}`",
         "mutations": f"`{GITHUB_MUTATIONS_FILE}`",
@@ -1680,7 +1683,7 @@ async def clearemojis(interaction: discord.Interaction, target: str = "all"):
 @tree.command(name="syncemojis", description="Scrape Wiki Names & Show Which Ones Are Missing Emoji IDs.")
 @discord.app_commands.default_permissions(administrator=True)
 async def syncemojis(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await followup(interaction, [container(txt("## Syncing Emoji Map With Wiki..."), sep(), txt("Scraping Traits & Mutations + Loading GitHub  Please Wait..."))])
     try:
         traits_res, mutations_res = await asyncio.gather(scrape_traits(), scrape_mutations())
@@ -1718,7 +1721,7 @@ async def syncemojis(interaction: discord.Interaction):
 async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_existing: bool = True):
     if interaction.guild is None:
         await interaction.response.send_message("This Command Must Be Used Inside A Server.", ephemeral=True); return
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
     guild_id  = interaction.guild.id
     bot_token = BOT_TOKEN
@@ -1907,7 +1910,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
 @tree.command(name="savemutations", description="Scrape Mutations From Wiki & Sync Emoji IDs To GitHub (mutations.lua).")
 @discord.app_commands.default_permissions(administrator=True)
 async def savemutations(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await followup(interaction, [container(txt("## Saving Mutations To GitHub..."), sep(), txt(f"Scraping Wiki + Loading Emoji IDs  Pushing To `{GITHUB_MUTATIONS_FILE}`  Please Wait..."))])
     try:
         mutations = await scrape_mutations()
@@ -1954,7 +1957,7 @@ async def savemutations(interaction: discord.Interaction):
 @tree.command(name="savetraits", description="Scrape Traits From Wiki & Sync Emoji IDs To GitHub (traits.lua).")
 @discord.app_commands.default_permissions(administrator=True)
 async def savetraits(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await followup(interaction, [container(txt("## Saving Traits To GitHub..."), sep(), txt(f"Scraping Wiki + Loading Emoji IDs  Pushing To `{GITHUB_TRAITS_FILE}`  Please Wait..."))])
     try:
         traits = await scrape_traits()
@@ -2008,7 +2011,7 @@ async def savetraits(interaction: discord.Interaction):
 async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"):
     if interaction.guild is None:
         await interaction.response.send_message(" Must Be Used Inside A Server!", ephemeral=True); return
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     wh_url  = webhook_url(interaction)
     payload = {
         "flags": FLAGS_V2,
@@ -2309,7 +2312,7 @@ async def on_interaction(interaction: discord.Interaction):
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(dry_run="Preview Only — Do Not Fix Anything")
 async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
     try:
         data, sha = await fetch_pets()
@@ -2417,7 +2420,7 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(dry_run="Preview Only — Do Not Save", overwrite_existing="Overwrite Pets That Already Have Valid Images (Default: Only Fetch Missing)")
 async def refetchall(interaction: discord.Interaction, dry_run: bool = False, overwrite_existing: bool = False):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
     try:
         data, sha = await fetch_pets()
