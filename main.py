@@ -1285,17 +1285,22 @@ async def scrapeallbrainrots(
     no_image:    list[str] = []
     recent_done: list[str] = []
 
-    def _progress(i: int, cur: str) -> list[dict]:
+    async def _safe_patch(i: int, cur: str):
         bar = progress_bar(i, len(to_add))
         log = "\n".join(f" `{n}`" for n in recent_done[-8:]) or "*(None Yet...)*"
-        return [container(
-            txt("## Adding Brainrots..."),
-            sep(),
-            txt(f"**Step 3 / 3** — Saving To GitHub\n\n**Progress:** {bar}\n**Processing:** `{title_case(cur)}`\n\n**Recently Added:**\n{log}"),
-        )]
+        try:
+            await patch_msg(interaction, [container(
+                txt("## Adding Brainrots..."),
+                sep(),
+                txt(f"**Step 3 / 3** — Saving To GitHub\n\n**Progress:** {bar}\n**Processing:** `{title_case(cur)}`\n\n**Recently Added:**\n{log}"),
+            )])
+        except Exception:
+            pass  # Never let UI update crash the loop
 
     for i, (name, img_url) in enumerate(to_add):
-        await patch_msg(interaction, _progress(i, name))
+        # Only update UI every 3 items to avoid rate limits
+        if i % 3 == 0:
+            await _safe_patch(i, name)
         final_url: str | None = img_url or None
         if not final_url:
             try:
@@ -1308,16 +1313,22 @@ async def scrapeallbrainrots(
             data[name] = final_url
             added_ok.append(name)
             recent_done.append(title_case(name))
-            await notify_pet_added(name, final_url)
+            try:
+                await notify_pet_added(name, final_url)
+            except Exception:
+                pass
         else:
             no_image.append(name)
         await asyncio.sleep(0.05)
 
-    await patch_msg(interaction, [container(
-        txt("## Pushing To GitHub..."),
-        sep(),
-        txt(f"**Progress:** {progress_bar(len(to_add), len(to_add))}\n**Processed:** {len(to_add)} Brainrots — Saving..."),
-    )])
+    try:
+        await patch_msg(interaction, [container(
+            txt("## Pushing To GitHub..."),
+            sep(),
+            txt(f"**Progress:** {progress_bar(len(to_add), len(to_add))}\n**Processed:** {len(to_add)} Brainrots — Saving..."),
+        )])
+    except Exception:
+        pass
 
     try:
         await push_pets(data, sha, f"[DK] ScrapeAll: Added {len(added_ok)} Brainrots From Category")
@@ -1397,11 +1408,15 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
     img_map = await api_batch_images(broken_names)
 
     for i, (name, _) in enumerate(broken_list):
-        await patch_msg(interaction, [container(
-            txt("## Refetching Broken Images..."),
-            sep(),
-            txt(f"**Progress:** {progress_bar(i, len(broken_list))}\n**Processing:** `{title_case(name)}`\n\n**Fixed:** {len(fixed_ok)}   **Still Broken:** {len(still_fail)}"),
-        )])
+        if i % 3 == 0:
+            try:
+                await patch_msg(interaction, [container(
+                    txt("## Refetching Broken Images..."),
+                    sep(),
+                    txt(f"**Progress:** {progress_bar(i, len(broken_list))}\n**Processing:** `{title_case(name)}`\n\n**Fixed:** {len(fixed_ok)}   **Still Broken:** {len(still_fail)}"),
+                )])
+            except Exception:
+                pass
         url = img_map.get(name)
         if not url:
             try:
@@ -1497,11 +1512,15 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
     img_map = await api_batch_images(to_fetch)
 
     for i, name in enumerate(to_fetch):
-        await patch_msg(interaction, [container(
-            txt("## Refetching All Pets..."),
-            sep(),
-            txt(f"**Progress:** {progress_bar(i, len(to_fetch))}\n**Processing:** `{title_case(name)}`\n\n**Success:** {len(fetched_ok)}    **Failed:** {len(fetch_failed)}"),
-        )])
+        if i % 3 == 0:
+            try:
+                await patch_msg(interaction, [container(
+                    txt("## Refetching All Pets..."),
+                    sep(),
+                    txt(f"**Progress:** {progress_bar(i, len(to_fetch))}\n**Processing:** `{title_case(name)}`\n\n**Success:** {len(fetched_ok)}    **Failed:** {len(fetch_failed)}"),
+                )])
+            except Exception:
+                pass
         url = img_map.get(name)
         if not url:
             try:
