@@ -14,8 +14,6 @@ from PIL import Image
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-# ── Bot & GitHub ──────────────────────────────────────────────────────────────
-
 BOT_TOKEN             = os.environ.get("BOT_TOKEN",             "")
 GITHUB_TOKEN          = os.environ.get("GITHUB_TOKEN",          "")
 GITHUB_USER           = os.environ.get("GITHUB_USER",           "truongkhainguyen1112010n-a11y")
@@ -27,62 +25,44 @@ GITHUB_TRAITS_FILE    = os.environ.get("GITHUB_TRAITS_FILE",    "traits.lua")
 GITHUB_MUTATIONS_FILE = os.environ.get("GITHUB_MUTATIONS_FILE", "mutations.lua")
 SCRAPER_API_KEY       = os.environ.get("SCRAPER_API_KEY",       "")
 
-# ── Proxy & URLs ──────────────────────────────────────────────────────────────
-
 RAILWAY_PROXY         = os.environ.get("RAILWAY_PROXY",         "https://proxy-production-22ad.up.railway.app/img")
-# ── API Keys & Tokens ─────────────────────────────────────────────────────────
-
 FANDOM_BASE           = "https://stealabrainrot.fandom.com/wiki/"
 
-# ── Discord & Bot Settings ────────────────────────────────────────────────────
-
 FLAGS_V2              = 32768
-FLAGS_V2_EPH          = 32768 | 64   # Components V2 + Ephemeral (only visible to invoker)
+FLAGS_V2_EPH          = 32768 | 64
 OWNER_ID              = 1498384419805986886
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def title_case(s: str) -> str:
-    """Capitalize first letter of every word."""
     return ' '.join(w[0].upper() + w[1:] if w else w for w in s.split(' '))
 
-
 def max_emoji_slots(premium_tier: int) -> int:
-    """Return max emoji slots based on server boost tier."""
     return {0: 50, 1: 100, 2: 150, 3: 250}.get(premium_tier, 50)
 
 # ── Bot Setup ─────────────────────────────────────────────────────────────────
 
-intents    = discord.Intents.default()
-bot        = commands.Bot(command_prefix="!", intents=intents)
-tree       = bot.tree
+intents = discord.Intents.default()
+bot     = commands.Bot(command_prefix="!", intents=intents)
+tree    = bot.tree
 
 # ── Owner Guard ───────────────────────────────────────────────────────────────
 
 async def owner_check(interaction: discord.Interaction) -> bool:
     if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message(
-            "Access Denied — This Command Is For The Owner Only.",
-            ephemeral=True
-        )
+        await interaction.response.send_message("Access Denied — This Command Is For The Owner Only.", ephemeral=True)
         return False
     return True
 
 async def global_owner_check(interaction: discord.Interaction) -> bool:
-    """Block ALL slash command interactions for non-owners at the tree level."""
     if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message(
-            "Access Denied — This Bot Is Private.",
-            ephemeral=True
-        )
+        await interaction.response.send_message("Access Denied — This Bot Is Private.", ephemeral=True)
         return False
     return True
 
 tree.interaction_check = global_owner_check
 
 # ── UI Components ─────────────────────────────────────────────────────────────
-
-# ── Text & Separator ──────────────────────────────────────────────────────────
 
 def txt(content: str) -> dict:
     return {"type": 10, "content": content}
@@ -92,9 +72,6 @@ def sep() -> dict:
 
 def sep_sm() -> dict:
     return {"type": 14, "divider": False, "spacing": 1}
-
-
-# ── Section Component ─────────────────────────────────────────────────────────
 
 def section(content: str, thumbnail_url: str) -> dict:
     return {
@@ -107,17 +84,11 @@ def section(content: str, thumbnail_url: str) -> dict:
         },
     }
 
-
-# ── Container & Action Row ────────────────────────────────────────────────────
-
 def container(*items: dict) -> dict:
     return {"type": 17, "components": list(items)}
 
 def action_row(*buttons: dict) -> dict:
     return {"type": 1, "components": list(buttons)}
-
-
-# ── Button Helpers ────────────────────────────────────────────────────────────
 
 def btn(label: str, custom_id: str, style: int = 2) -> dict:
     return {"type": 2, "style": style, "label": label, "custom_id": custom_id}
@@ -127,9 +98,6 @@ def btn_yes(custom_id: str) -> dict:
 
 def btn_no(custom_id: str) -> dict:
     return btn("No", custom_id, style=2)
-
-
-# ── Progress Bar ──────────────────────────────────────────────────────────────
 
 def progress_bar(done: int, total: int, width: int = 20) -> str:
     pct    = done / total if total else 1
@@ -146,13 +114,8 @@ def progress_bar(done: int, total: int, width: int = 20) -> str:
 
 # ── Discord Helpers ───────────────────────────────────────────────────────────
 
-# ── Webhook URL Builder ───────────────────────────────────────────────────────
-
 def webhook_url(interaction: discord.Interaction) -> str:
     return f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
-
-
-# ── Send & Followup ───────────────────────────────────────────────────────────
 
 async def send_v2(interaction: discord.Interaction, components: list[dict], eph: bool = True):
     url   = webhook_url(interaction)
@@ -161,7 +124,6 @@ async def send_v2(interaction: discord.Interaction, components: list[dict], eph:
         async with s.post(url, json={"flags": flags, "components": components}) as r:
             if r.status not in (200, 204):
                 raise Exception(f"Discord {r.status}: {(await r.text())[:200]}")
-
 
 async def followup(interaction: discord.Interaction, components: list[dict], eph: bool = True):
     url     = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
@@ -180,19 +142,14 @@ async def followup(interaction: discord.Interaction, components: list[dict], eph
                 raise Exception(f"Discord {r.status}: {body[:200]}")
     raise Exception("Rate Limited  Max Retries Exceeded")
 
-
-# ── Patch Message ─────────────────────────────────────────────────────────────
-
 async def patch_msg(interaction: discord.Interaction, components: list[dict], eph: bool = True):
     url   = f"{webhook_url(interaction)}/messages/@original"
     flags = FLAGS_V2_EPH if eph else FLAGS_V2
     async with aiohttp.ClientSession() as s:
         async with s.patch(url, json={"flags": flags, "components": components}) as r:
-            await r.read()   # consume body so the connection is properly released
+            await r.read()
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
-
-# ── URL Check Functions ───────────────────────────────────────────────────────
 
 def is_railway(url: str) -> bool:
     return "up.railway.app" in url or "railway.app" in url
@@ -200,30 +157,16 @@ def is_railway(url: str) -> bool:
 def is_cdn(url: str) -> bool:
     return "media.discordapp.net/attachments" in url or "cdn.discordapp.com/attachments" in url
 
-
-# ── Wikia URL Cleaner ─────────────────────────────────────────────────────────
-
 def _clean_wikia_url(url: str) -> str:
-    """Normalize Fandom/wikia URL to a clean static.wikia.nocookie.net URL."""
     url = re.sub(r'https?://vignette\d*\.wikia\.nocookie\.net', 'https://static.wikia.nocookie.net', url)
-    # Strip ALL Fandom CDN resize/thumbnail path segments after /revision/latest
-    # e.g. /scale-to-width-down/200  /smart/width/40/height/30  /top-crop/width/200/height/200
     url = re.sub(r'(/revision/latest)(?:/[^?#]*)?', r'\1', url)
-    # Keep ?cb=... so Discord CDN caches correctly
     return url
 
-
-# ── MediaWiki Batch Image Fetcher ──────────────────────────────────────────────
-# Uses prop=pageimages — same /api.php endpoint that bypasses Cloudflare.
-# Returns {name: railway_url} for all names with images found.
-
 async def api_batch_images(names: list[str]) -> dict[str, str]:
-    """Batch-fetch thumbnail URLs via MediaWiki prop=pageimages (no Cloudflare).
-    Processes 50 titles per request. Returns {title: railway_url}."""
-    BASE     = "https://stealabrainrot.fandom.com/api.php"
-    hdrs     = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
-    timeout  = aiohttp.ClientTimeout(total=30)
-    result:  dict[str, str] = {}
+    BASE      = "https://stealabrainrot.fandom.com/api.php"
+    hdrs      = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"}
+    timeout   = aiohttp.ClientTimeout(total=30)
+    result:   dict[str, str] = {}
     connector = aiohttp.TCPConnector(force_close=True)
     async with aiohttp.ClientSession(connector=connector) as session:
         for i in range(0, len(names), 50):
@@ -248,15 +191,10 @@ async def api_batch_images(names: list[str]) -> dict[str, str]:
                 continue
     return result
 
-
-
-
 def via_proxy(url: str) -> str:
-    """Proxy any image URL through Railway with auto resize."""
     if not url: return url
     encoded = quote(url, safe='')
     return f"{RAILWAY_PROXY}?url={encoded}"
-
 
 def extract_wikia_url(url: str) -> str | None:
     if is_railway(url) or is_cdn(url):
@@ -274,31 +212,23 @@ def extract_wikia_url(url: str) -> str | None:
     if m: return _clean_wikia_url(m.group(1))
     return None
 
-
 def to_railway(url: str) -> str:
-    """Normalize and proxy the URL through Railway for proper thumbnail display."""
-    if is_cdn(url): return url          # Discord CDN — keep as-is
+    if is_cdn(url): return url
     if is_railway(url):
-        # Already proxied — extract inner URL and re-proxy with current config
         m = re.search(r'[?&]url=(.+)', url)
         if m:
             inner = unquote(m.group(1))
             return via_proxy(inner)
         return url
-    wikia = extract_wikia_url(url)
+    wikia  = extract_wikia_url(url)
     target = wikia if wikia else url
     return via_proxy(target)
-
-
-# ── String Utils ──────────────────────────────────────────────────────────────
 
 def shorten(url: str, limit: int = 400) -> str:
     if len(url) > limit: url = url[:limit] + "..."
     return "\n".join(url[i:i+90] for i in range(0, len(url), 90))
 
 # ── GitHub Helpers ────────────────────────────────────────────────────────────
-
-# ── Lua Parser ────────────────────────────────────────────────────────────────
 
 def parse_lua(text: str) -> dict:
     data = {}
@@ -312,7 +242,6 @@ def parse_lua(text: str) -> dict:
             data[k] = v
     return data
 
-
 def to_lua(data: dict) -> str:
     max_len = max((len(k) for k in data), default=0)
     lines   = []
@@ -322,9 +251,6 @@ def to_lua(data: dict) -> str:
         pad = " " * (max_len - len(k) + 1)
         lines.append('    ["' + ek + '"]' + pad + '= "' + ev + '",')
     return "\n".join(lines)
-
-
-# ── GitHub API ────────────────────────────────────────────────────────────────
 
 async def gh_fetch(filename: str) -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
@@ -339,7 +265,6 @@ async def gh_fetch(filename: str) -> tuple[dict, str]:
             except: data = parse_lua(content)
             return data, result["sha"]
 
-
 async def gh_push(filename: str, data: dict, sha: str, msg: str):
     sorted_data = dict(sorted(data.items(), key=lambda x: x[0].lower()))
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}"
@@ -348,27 +273,22 @@ async def gh_push(filename: str, data: dict, sha: str, msg: str):
         "Accept":        "application/vnd.github.v3+json",
         "Content-Type":  "application/json",
     }
-    # Always re-fetch latest SHA to avoid 409 conflicts
     fresh_sha = await _gh_latest_sha(filename, headers)
     encoded   = base64.b64encode(to_lua(sorted_data).encode()).decode()
     body      = {"message": msg, "content": encoded, "branch": GITHUB_BRANCH}
-    if fresh_sha or sha:                     # Only Send SHA When File Already Exists
+    if fresh_sha or sha:
         body["sha"] = fresh_sha or sha
     async with aiohttp.ClientSession() as s:
         async with s.put(url, headers=headers, json=body) as r:
             if r.status not in (200, 201):
                 raise Exception(f"GitHub Push {r.status}: {(await r.text())[:300]}")
 
-# ── Pet GitHub ────────────────────────────────────────────────────────────────
-
-# ── Fetch Pets ────────────────────────────────────────────────────────────────
-
 async def fetch_pets() -> tuple[dict, str]:
     url     = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE}?ref={GITHUB_BRANCH}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     async with aiohttp.ClientSession() as s:
         async with s.get(url, headers=headers) as r:
-            if r.status == 404: return {}, ""          # File Does Not Exist — Will Be Created On Push
+            if r.status == 404: return {}, ""
             if r.status != 200: raise Exception(f"GitHub {r.status}: {(await r.text())[:200]}")
             result  = await r.json()
             content = base64.b64decode(result["content"]).decode()
@@ -376,9 +296,7 @@ async def fetch_pets() -> tuple[dict, str]:
             except: data = parse_lua(content)
             return data, result["sha"]
 
-
 async def _gh_latest_sha(filename: str, headers: dict) -> str:
-    """Always fetch the latest SHA for a file to avoid 409 conflicts."""
     url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
     async with aiohttp.ClientSession() as s:
         async with s.get(url, headers=headers) as r:
@@ -386,15 +304,10 @@ async def _gh_latest_sha(filename: str, headers: dict) -> str:
                 return (await r.json()).get("sha", "")
             return ""
 
-
 def _encode_for_file(filename: str, data: dict) -> str:
-    """thumbnails1.json → JSON "name": "url"  |  thumbnails.json + *.lua → Lua ["name"] = "url"."""
-    if filename == GITHUB_JSON_FILE:   # thumbnails1.json → standard JSON
+    if filename == GITHUB_JSON_FILE:
         return base64.b64encode(json.dumps(data, ensure_ascii=False, indent=2).encode()).decode()
-    return base64.b64encode(to_lua(data).encode()).decode()   # thumbnails.json → Lua table
-
-
-# ── Push Pets ─────────────────────────────────────────────────────────────────
+    return base64.b64encode(to_lua(data).encode()).decode()
 
 async def push_pets(data: dict, sha: str, msg: str):
     sorted_data = dict(sorted(data.items(), key=lambda x: x[0].lower()))
@@ -409,21 +322,132 @@ async def push_pets(data: dict, sha: str, msg: str):
         url       = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}"
         encoded   = _encode_for_file(filename, sorted_data)
         body      = {"message": msg, "content": encoded, "branch": GITHUB_BRANCH}
-        if fresh_sha:                        # Only Send SHA When File Already Exists
+        if fresh_sha:
             body["sha"] = fresh_sha
         async with aiohttp.ClientSession() as s:
             async with s.put(url, headers=headers, json=body) as r:
                 if r.status not in (200, 201):
                     raise Exception(f"GitHub Push [{filename}] {r.status}: {(await r.text())[:300]}")
 
-    # Push sequentially — each fetch fresh SHA to avoid 409 conflicts
     await _push_file(GITHUB_FILE)
-    await asyncio.sleep(0.5)   # Small gap so GitHub registers first push
+    await asyncio.sleep(0.5)
     await _push_file(GITHUB_JSON_FILE)
 
-# ── Wiki Scrapers ─────────────────────────────────────────────────────────────
+# ── Notification Helper ───────────────────────────────────────────────────────
 
-# ── Pet Image Scraper ─────────────────────────────────────────────────────────
+async def notify_pet_added(name: str, url: str):
+    """Send a notification to the configured channel when a new pet is added."""
+    channel_id = getattr(bot, "notify_channel_id", None)
+    if not channel_id:
+        return
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        return
+    try:
+        payload = {
+            "flags": FLAGS_V2,
+            "components": [container(
+                txt("## New Brainrot Added"),
+                sep(),
+                section(f"**{title_case(name)}**", url),
+                sep(),
+                txt(f"**URL:**\n```\n{shorten(url, 200)}\n```"),
+            )],
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers={"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"},
+                json=payload,
+            ) as r:
+                await r.read()
+    except Exception:
+        pass
+
+# ── Emoji Helpers ─────────────────────────────────────────────────────────────
+
+def parse_emoji_input(raw: str) -> dict[str, str]:
+    result = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r'<:([^:]+):(\d+)>', line)
+        if m:
+            result[m.group(1)] = f"<:{m.group(1)}:{m.group(2)}>"
+            continue
+        m = re.match(r'^([^:]+):(\d{10,20})$', line)
+        if m:
+            name = m.group(1).strip()
+            eid  = m.group(2).strip()
+            result[name] = f"<:{name}:{eid}>"
+    return result
+
+def sanitize_name(name: str) -> str:
+    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    sanitized = re.sub(r'_+', '_', sanitized).strip('_')
+    if not sanitized:
+        sanitized = "emoji"
+    if len(sanitized) < 2:
+        sanitized = sanitized + "_"
+    return sanitized[:32]
+
+async def download_and_resize(url: str, session: aiohttp.ClientSession, size: int = 128) -> bytes | None:
+    try:
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with session.get(url, timeout=timeout) as r:
+            if r.status != 200:
+                return None
+            data = await r.read()
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+        img.thumbnail((size, size), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        result = buf.getvalue()
+        if len(result) > 256 * 1024:
+            img.thumbnail((64, 64), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            result = buf.getvalue()
+        return result
+    except Exception:
+        return None
+
+async def upload_emoji(
+    guild_id: int,
+    bot_token: str,
+    name: str,
+    image_bytes: bytes,
+    session: aiohttp.ClientSession,
+) -> tuple[dict | None, str]:
+    b64     = base64.b64encode(image_bytes).decode()
+    payload = {"name": name, "image": f"data:image/png;base64,{b64}"}
+    headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+    for attempt in range(3):
+        async with session.post(
+            f"https://discord.com/api/v10/guilds/{guild_id}/emojis",
+            headers=headers,
+            json=payload,
+        ) as r:
+            if r.status == 201:
+                return await r.json(), ""
+            body = await r.text()
+            if r.status == 429:
+                try:    retry_after = json.loads(body).get("retry_after", 1.5)
+                except: retry_after = 1.5
+                await asyncio.sleep(float(retry_after) + 0.3)
+                continue
+            if r.status == 400:
+                err_data = {}
+                try: err_data = json.loads(body)
+                except: pass
+                if err_data.get("code") == 30008 or "maximum" in body.lower():
+                    return None, "SERVER_FULL"
+                return None, f"HTTP 400: {body[:120]}"
+            return None, f"HTTP {r.status}: {body[:120]}"
+    return None, "Rate Limited — Max Retries"
+
+# ── Wiki Scrapers ─────────────────────────────────────────────────────────────
 
 async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
     slug     = pet_name.replace(" ", "_")
@@ -431,7 +455,6 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
     debug    = []
 
     def _extract_image(html: str) -> str | None:
-        """Pull the best image URL out of a wiki page HTML."""
         m = re.search(r'<meta property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html)
         if not m:
             m = re.search(r'<meta content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', html)
@@ -446,7 +469,6 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
             return _clean_wikia_url(re.sub(r'/revision/latest.*', '', imgs[0]))
         return None
 
-    # ── Attempt 1: urllib via thread (bypasses aiohttp TLS fingerprint) ───────
     loop = asyncio.get_event_loop()
     def _urllib_get(url: str) -> str | None:
         import urllib.request as _ur
@@ -470,7 +492,6 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
         pass
     debug.append("Direct Failed")
 
-    # ── Attempt 2: aiohttp direct ─────────────────────────────────────────────
     timeout   = aiohttp.ClientTimeout(total=30)
     connector = aiohttp.TCPConnector(force_close=True)
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -487,7 +508,6 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
             pass
         debug.append("aiohttp Failed")
 
-        # ── Attempt 3: ScraperAPI ─────────────────────────────────────────────
         if SCRAPER_API_KEY:
             try:
                 async with session.get(
@@ -508,9 +528,6 @@ async def scrape_pet_image(pet_name: str) -> tuple[str | None, str]:
     debug.append("No Image Found")
     return None, "\n".join(debug)
 
-
-# ── Wiki Table Helpers ────────────────────────────────────────────────────────
-
 def _best_wikia_img(cell_html: str) -> str | None:
     for attr in ('data-src', 'data-image-key', 'src'):
         for m in re.finditer(rf'{attr}=["\'"]([^"\'"]+)["\'"]', cell_html, re.IGNORECASE):
@@ -519,12 +536,7 @@ def _best_wikia_img(cell_html: str) -> str | None:
                 return to_railway(_clean_wikia_url(url))
     return None
 
-
 async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
-    """
-    Fetch a wiki table page via MediaWiki action=parse API (bypasses Cloudflare).
-    Falls back to direct urllib fetch, then aiohttp, then ScraperAPI.
-    """
     BASE    = "https://stealabrainrot.fandom.com/api.php"
     slug    = urllib.parse.unquote(page_url.split("/wiki/")[-1])
     timeout = aiohttp.ClientTimeout(total=40)
@@ -534,7 +546,6 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
     }
     html: str | None = None
 
-    # ── Attempt 1: MediaWiki parse API (no Cloudflare) ────────────────────────
     connector = aiohttp.TCPConnector(force_close=True)
     async with aiohttp.ClientSession(connector=connector) as session:
         try:
@@ -550,7 +561,6 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
         except Exception:
             pass
 
-        # ── Attempt 2: urllib via thread ─────────────────────────────────────
         if not html:
             loop = asyncio.get_event_loop()
             def _urllib_get(url: str) -> str | None:
@@ -567,7 +577,6 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
             except Exception:
                 pass
 
-        # ── Attempt 3: aiohttp direct ─────────────────────────────────────────
         if not html:
             try:
                 async with session.get(page_url, headers=hdrs, timeout=timeout) as r:
@@ -577,7 +586,6 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
             except Exception:
                 pass
 
-        # ── Attempt 4: ScraperAPI ─────────────────────────────────────────────
         if not html and SCRAPER_API_KEY:
             try:
                 async with session.get(
@@ -610,8 +618,8 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
         if ths:
             headers = [clean(h).lower() for h in ths]
             for i, h in enumerate(headers):
-                if h == "name":                     NAME_COL = i
-                if h in ("icon", "image", "img"):  ICON_COL = i
+                if h == "name":                    NAME_COL = i
+                if h in ("icon", "image", "img"): ICON_COL = i
             continue
         cells = td_pat.findall(row_html)
         if len(cells) <= max(NAME_COL, ICON_COL):
@@ -642,25 +650,15 @@ async def _scrape_wiki_table(page_url: str) -> list[tuple[str, str | None]]:
 
     return entries
 
-
-# ── Scrape Mutations / Traits / Category ──────────────────────────────────────
-
 async def scrape_mutations() -> list[tuple[str, str | None]]:
     return await _scrape_wiki_table("https://stealabrainrot.fandom.com/wiki/Mutations")
 
 async def scrape_traits() -> list[tuple[str, str | None]]:
     return await _scrape_wiki_table("https://stealabrainrot.fandom.com/wiki/Traits")
 
-
 async def scrape_category_brainrots(
-    on_page=None,  # optional: async callable(page, total_so_far, method, next_url)
+    on_page=None,
 ) -> list[tuple[str, str | None]]:
-    """
-    Scrape ALL brainrots from Category:Listed_Brainrots.
-    - Fresh session per page to beat Cloudflare rate-limiting.
-    - Validates with 'category-page__member' marker (not just <!DOCTYPE>).
-    - Falls back to MediaWiki JSON API if HTML scraping is stuck on page 1.
-    """
     BASE_URL  = "https://stealabrainrot.fandom.com"
     start_url = BASE_URL + "/wiki/Category:Listed_Brainrots"
     timeout   = aiohttp.ClientTimeout(total=40)
@@ -680,12 +678,8 @@ async def scrape_category_brainrots(
     visited_urls: set[str] = set()
 
     async def _fetch_html(url: str) -> tuple[str | None, str]:
-        """Fetch one category page.
-        Priority: urllib (bypasses aiohttp TLS fingerprint detection) →
-                  aiohttp direct → ScraperAPI → Failed."""
         loop = asyncio.get_event_loop()
 
-        # ── Attempt 1: urllib via thread (same as our working test) ──────────
         def _urllib_fetch(u: str) -> str | None:
             import urllib.request as _ur
             try:
@@ -706,7 +700,6 @@ async def scrape_category_brainrots(
         except Exception:
             pass
 
-        # ── Attempt 2: aiohttp direct ─────────────────────────────────────────
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
             try:
@@ -717,7 +710,6 @@ async def scrape_category_brainrots(
             except Exception:
                 pass
 
-            # ── Attempt 3: ScraperAPI ─────────────────────────────────────────
             if SCRAPER_API_KEY:
                 try:
                     async with session.get(
@@ -734,7 +726,6 @@ async def scrape_category_brainrots(
         return None, "Failed"
 
     async def _api_get_all_names() -> list[str]:
-        """MediaWiki JSON API — no Cloudflare, returns all member names."""
         names: list[str] = []
         cont: str | None = None
         connector = aiohttp.TCPConnector(force_close=True)
@@ -764,20 +755,16 @@ async def scrape_category_brainrots(
                     break
         return names
 
-    async def _api_batch_images(names: list[str]) -> dict[str, str]:
-        """MediaWiki prop=pageimages — no Cloudflare, batch-fetch thumbnails.
-        Returns {name: railway_url}. Processes 50 titles per request."""
+    async def _api_batch_images_local(names: list[str]) -> dict[str, str]:
         result: dict[str, str] = {}
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
             for i in range(0, len(names), 50):
-                batch = names[i:i + 50]
+                batch  = names[i:i + 50]
                 params = {
-                    "action":      "query",
-                    "prop":        "pageimages",
-                    "titles":      "|".join(batch),
-                    "pithumbsize": "500",
-                    "format":      "json",
+                    "action": "query", "prop": "pageimages",
+                    "titles": "|".join(batch),
+                    "pithumbsize": "500", "format": "json",
                 }
                 try:
                     async with session.get(
@@ -831,11 +818,9 @@ async def scrape_category_brainrots(
                 return c
         return None
 
-    # ── Main Pagination Loop ──────────────────────────────────────────────────
-
     next_url: str | None = start_url
-    page     = 0
-    got_stuck = False   # True when a page returns 0 new items (ScraperAPI cached page 1)
+    page      = 0
+    got_stuck = False
 
     while next_url and next_url not in visited_urls:
         visited_urls.add(next_url)
@@ -849,7 +834,6 @@ async def scrape_category_brainrots(
             new_pg   = len(all_results) - count_before
             next_url = _find_next(html)
 
-            # Detect cached response: page 2+ returned 0 new items
             if page > 1 and new_pg == 0:
                 got_stuck = True
                 method    = f"{method} — Stuck (Cached, 0 New Items)"
@@ -865,14 +849,11 @@ async def scrape_category_brainrots(
         if next_url:
             await asyncio.sleep(0.8)
 
-    # ── MediaWiki API Fallback ────────────────────────────────────────────────
-    # Triggered when only page 1 was scraped OR ScraperAPI returned a cached copy.
     if page <= 1 or got_stuck:
-        api_names  = await _api_get_all_names()
-        # Batch-fetch thumbnails via pageimages API (same endpoint, no Cloudflare)
-        new_names  = [n for n in api_names if n not in seen_names]
-        img_map    = await api_batch_images(new_names) if new_names else {}
-        api_added  = 0
+        api_names = await _api_get_all_names()
+        new_names = [n for n in api_names if n not in seen_names]
+        img_map   = await _api_batch_images_local(new_names) if new_names else {}
+        api_added = 0
         for name in new_names:
             seen_names.add(name)
             img_url = img_map.get(name)
@@ -883,9 +864,6 @@ async def scrape_category_brainrots(
             await on_page(-1, len(all_results), f"API Fallback (+{api_added} Names, {with_img} With Image)", None)
 
     return all_results
-
-
-# ── New Pet Notification
 
 # ── /Setchannel ───────────────────────────────────────────────────────────────
 
@@ -900,13 +878,12 @@ async def setchannel(interaction: discord.Interaction, channel: discord.TextChan
         sep(),
         txt(
             f"**Channel:** {channel.mention}\n\n"
-            f"New Pet Thumbnails Added Via `/addpet`, `/fetchpet`, Or `/scrapeallbrainrots` "
+            f"New Pet Thumbnails Added Via `/addbrainrots`, `/fetchbrainrots`, Or `/scrapeallbrainrots` "
             f"Will Now Be Announced Here."
         ),
         sep(),
         txt(f"**Channel ID:** `{channel.id}`"),
     )])
-
 
 # ── /Ping ─────────────────────────────────────────────────────────────────────
 
@@ -935,7 +912,6 @@ async def ping(interaction: discord.Interaction):
 async def addpet(interaction: discord.Interaction, name: str, url: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
     converted = to_railway(url)
-    label     = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
     try:
         data, sha = await fetch_pets()
     except Exception as e:
@@ -952,7 +928,7 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
             sep(),
             txt(f"**New URL You Tried:**\n```\n{shorten(converted, 240)}\n```"),
             sep(),
-            txt("Use `/updatepet` To Change The URL."),
+            txt("Use `/updatebrainrots` To Change The URL."),
         )])
         return
     try:
@@ -963,16 +939,18 @@ async def addpet(interaction: discord.Interaction, name: str, url: str):
         ok = False; err = str(e)
     if ok:
         label_text = "Railway Proxy - Converted" if converted != url else "Discord CDN - Kept As-Is"
-        await send_v2(interaction, [container(txt("## Brainrot Added Successfully"),
-        sep(),
-        section(f"**{title_case(name)}**\n\n{label_text}", converted),
-        sep(),
-        txt(f"**URL:**\n```\n{shorten(converted)}\n```"),
-        sep(),
-        txt("**GitHub** — Pushed & Sorted A To Z"))])
+        await send_v2(interaction, [container(
+            txt("## Brainrot Added Successfully"),
+            sep(),
+            section(f"**{title_case(name)}**\n\n{label_text}", converted),
+            sep(),
+            txt(f"**URL:**\n```\n{shorten(converted)}\n```"),
+            sep(),
+            txt("**GitHub** — Pushed & Sorted A To Z"),
+        )])
         await notify_pet_added(name, converted)
     else:
-        await send_v2(interaction, [container(txt("## Failed To Add Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub**  Push Failed\n```\n{err[:200]}\n```"))])
+        await send_v2(interaction, [container(txt("## Failed To Add Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
 # ── /Updatebrainrots ──────────────────────────────────────────────────────────
 
@@ -1000,17 +978,19 @@ async def updatepet(interaction: discord.Interaction, name: str, url: str):
     except Exception as e:
         ok = False; err = str(e)
     if ok:
-        await send_v2(interaction, [container(txt("## Pet Updated Successfully"),
-        sep(),
-        section(f"**{name}**\n\n{label}", converted),
-        sep(),
-        txt(f"**New URL:**\n```\n{shorten(converted, 240)}\n```"),
-        sep(),
-        txt(f"**Previous URL:**\n```\n{shorten(old_url, 200)}\n```"),
-        sep(),
-        txt("**GitHub** — Pushed & Sorted A To Z"))])
+        await send_v2(interaction, [container(
+            txt("## Pet Updated Successfully"),
+            sep(),
+            section(f"**{name}**\n\n{label}", converted),
+            sep(),
+            txt(f"**New URL:**\n```\n{shorten(converted, 240)}\n```"),
+            sep(),
+            txt(f"**Previous URL:**\n```\n{shorten(old_url, 200)}\n```"),
+            sep(),
+            txt("**GitHub** — Pushed & Sorted A To Z"),
+        )])
     else:
-        await send_v2(interaction, [container(txt("## Failed To Update Pet"), sep(), txt(f"**Pet:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+        await send_v2(interaction, [container(txt("## Failed To Update Pet"), sep(), txt(f"**Pet:** `{name}`\n\n**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
 # ── /Deletebrainrots ──────────────────────────────────────────────────────────
 
@@ -1025,26 +1005,24 @@ async def deletepet(interaction: discord.Interaction, name: str):
         return
     if name not in data:
         suggestions = [k for k in data if name.lower() in k.lower()]
-        items = [txt(f"##  Pet Not Found\n**Pet:** `{name}`")]
+        items = [txt(f"## Pet Not Found\n**Pet:** `{name}`")]
         if suggestions: items += [sep(), txt("**Similar Pets:**\n" + "\n".join(f" `{s}`" for s in suggestions[:8]))]
         await send_v2(interaction, [container(*items)]); return
     deleted_url = data[name]
     wh_url      = webhook_url(interaction)
     payload = {
         "flags": FLAGS_V2,
-        "components": [
-            container(
-                txt("## Confirm Delete Brainrot"),
-                sep(),
-                section(f"**{title_case(name)}**", deleted_url),
-                sep(),
-                txt(f"**URL:**\n```\n{shorten(deleted_url, 200)}\n```"),
-                sep(),
-                txt("⚠️ **Are You Sure You Want To Delete This Pet?**"),
-                sep(),
-                action_row(btn_yes(f"delbrainrot_yes:{name}"), btn_no("delbrainrot_no")),
-            ),
-        ],
+        "components": [container(
+            txt("## Confirm Delete Brainrot"),
+            sep(),
+            section(f"**{title_case(name)}**", deleted_url),
+            sep(),
+            txt(f"**URL:**\n```\n{shorten(deleted_url, 200)}\n```"),
+            sep(),
+            txt("⚠️ **Are You Sure You Want To Delete This Pet?**"),
+            sep(),
+            action_row(btn_yes(f"delbrainrot_yes:{name}"), btn_no("delbrainrot_no")),
+        )],
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
@@ -1064,18 +1042,17 @@ async def getpet(interaction: discord.Interaction, name: str):
         await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Get Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
     if name not in data:
         suggestions = [k for k in data if name.lower() in k.lower()]
-        items = [txt(f"##  Pet Not Found\n**Pet:** `{name}`")]
-        if suggestions: items += [sep(), txt("** Did You Mean:**\n" + "\n".join(f" `{s}`" for s in suggestions[:5]))]
+        items = [txt(f"## Pet Not Found\n**Pet:** `{name}`")]
+        if suggestions: items += [sep(), txt("**Did You Mean:**\n" + "\n".join(f" `{s}`" for s in suggestions[:5]))]
         await send_v2(interaction, [container(*items)]); return
     url_val = data[name]
-    await send_v2(interaction, [container(txt("## Pet Thumbnail"),
-    sep(),
-    section(f"**{name}**", url_val),
-    sep(),
-    txt(f"**URL:**\n```\n{shorten(url_val)}\n```"))])
-
-# ── /Fetchbrainrots ───────────────────────────────────────────────────────────
-
+    await send_v2(interaction, [container(
+        txt("## Pet Thumbnail"),
+        sep(),
+        section(f"**{name}**", url_val),
+        sep(),
+        txt(f"**URL:**\n```\n{shorten(url_val)}\n```"),
+    )])
 
 # ── /Listbrainrots ─────────────────────────────────────────────────────────────
 
@@ -1108,18 +1085,16 @@ async def listbrainrots(interaction: discord.Interaction):
         await asyncio.sleep(0.8)
     await followup(interaction, [container(txt(f"**Done  {len(pet_names)} Pets Listed.**"))])
 
-# ── /Fetchpet ─────────────────────────────────────────────────────────────────
+# ── /Fetchbrainrots ───────────────────────────────────────────────────────────
 
 @tree.command(name="fetchbrainrots", description="Auto-Fetch A Brainrot's Image From The Fandom Wiki And Save It.")
 @discord.app_commands.default_permissions(administrator=True)
 async def fetchpet(interaction: discord.Interaction, name: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
 
-    # Use batch images API (no Cloudflare) to fetch single pet image
-    img_map = await api_batch_images([name])
+    img_map     = await api_batch_images([name])
     railway_url = img_map.get(name)
 
-    # Fallback: scrape_pet_image for edge cases
     if not railway_url:
         try:
             wikia_url, debug_info = await scrape_pet_image(name)
@@ -1141,24 +1116,23 @@ async def fetchpet(interaction: discord.Interaction, name: str):
         data, sha = await fetch_pets()
     except Exception as e:
         await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Operation:** Fetch Pet\n**Pet:** `{name}`\n\n**Error:**\n```\n{e}\n```"))]); return
+
     if name in data:
         existing_url = data[name]
         wh_url       = webhook_url(interaction)
         payload = {
             "flags": FLAGS_V2,
-            "components": [
-                container(
-                    txt("## Brainrot Already Exists"),
-                    sep(),
-                    section(f"**{title_case(name)}**\n\nAlready In GitHub — Overwrite?", existing_url),
-                    sep(),
-                    txt(f"**Current URL:**\n```\n{shorten(existing_url)}\n```"),
-                    sep(),
-                    txt(f"**Fetched URL:**\n```\n{shorten(short_url)}\n```"),
-                    sep(),
-                    action_row(btn_yes(f"overwrite_yes:{name}"), btn_no(f"overwrite_no:{name}")),
-                ),
-            ],
+            "components": [container(
+                txt("## Brainrot Already Exists"),
+                sep(),
+                section(f"**{title_case(name)}**\n\nAlready In GitHub — Overwrite?", existing_url),
+                sep(),
+                txt(f"**Current URL:**\n```\n{shorten(existing_url)}\n```"),
+                sep(),
+                txt(f"**Fetched URL:**\n```\n{shorten(short_url)}\n```"),
+                sep(),
+                action_row(btn_yes(f"overwrite_yes:{name}"), btn_no(f"overwrite_no:{name}")),
+            )],
         }
         async with aiohttp.ClientSession() as s:
             async with s.post(wh_url, json=payload) as r:
@@ -1166,8 +1140,8 @@ async def fetchpet(interaction: discord.Interaction, name: str):
         bot._fetchbrainrots_pending       = getattr(bot, "_fetchbrainrots_pending", {})
         bot._fetchbrainrots_pending[name] = {"railway_url": railway_url, "data": data, "sha": sha}
         return
-    # Show confirm dialog before saving
-    key    = f"{interaction.id}"
+
+    key     = f"{interaction.id}"
     wh_url2 = webhook_url(interaction)
     payload2 = {
         "flags": FLAGS_V2,
@@ -1212,24 +1186,21 @@ async def syncpets(interaction: discord.Interaction):
     wh_url        = webhook_url(interaction)
     payload = {
         "flags": FLAGS_V2,
-        "components": [
-            container(
-                txt("## Sync Pets"),
-                sep(),
-                txt(f"**Total Pets:** {len(data)}\n**Found {len(needs_sync)} Pet(s) Not Synced:**\n\n{preview_lines}{more_note}"),
-                sep(),
-                txt("**Convert All To Railway Proxy Format?**"),
-                sep(),
-                action_row(btn_yes("syncbrainrots_yes"), btn_no("syncbrainrots_no")),
-            ),
-        ],
+        "components": [container(
+            txt("## Sync Pets"),
+            sep(),
+            txt(f"**Total Pets:** {len(data)}\n**Found {len(needs_sync)} Pet(s) Not Synced:**\n\n{preview_lines}{more_note}"),
+            sep(),
+            txt("**Convert All To Railway Proxy Format?**"),
+            sep(),
+            action_row(btn_yes("syncbrainrots_yes"), btn_no("syncbrainrots_no")),
+        )],
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
             if r.status not in (200, 204): raise Exception(f"Discord {r.status}")
     bot._syncpets_pending = getattr(bot, "_syncpets_pending", {})
     bot._syncpets_pending["latest"] = {"data": data, "sha": sha, "to_convert": to_convert, "to_refetch": to_refetch}
-
 
 # ── /Scrapeallbrainrots ───────────────────────────────────────────────────────
 
@@ -1246,21 +1217,16 @@ async def scrapeallbrainrots(
 ):
     await interaction.response.defer(thinking=True, ephemeral=True)
 
-    # ── Step 1 / 3 — Load GitHub ─────────────────────────────────────────────
     await send_v2(interaction, [container(
         txt("## Scraping Category: Listed Brainrots"),
         sep(),
-        txt(
-            f"**Skip Existing:** `{skip_existing}`   **Dry Run:** `{dry_run}`\n\n"
-            f"**Step 1 / 3** — Loading GitHub Data..."
-        ),
+        txt(f"**Skip Existing:** `{skip_existing}`   **Dry Run:** `{dry_run}`\n\n**Step 1 / 3** — Loading GitHub Data..."),
     )])
     try:
         data, sha = await fetch_pets()
     except Exception as e:
         await followup(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
-    # ── Step 2 / 3 — Scrape Pages ─────────────────────────────────────────────
     page_log: list[str] = []
 
     async def on_page(page: int, total: int, method: str, next_url: str | None):
@@ -1273,10 +1239,7 @@ async def scrapeallbrainrots(
         await patch_msg(interaction, [container(
             txt("## Scanning Category Pages..."),
             sep(),
-            txt(
-                f"**Step 2 / 3** — Fetching Brainrots From Wiki\n\n"
-                + "\n".join(page_log[-6:])
-            ),
+            txt(f"**Step 2 / 3** — Fetching Brainrots From Wiki\n\n" + "\n".join(page_log[-6:])),
         )])
 
     try:
@@ -1318,7 +1281,6 @@ async def scrapeallbrainrots(
             txt(f"**{len(to_add)} Brainrots Will Be Added:**\n\n{preview}{more}"),
         )]); return
 
-    # ── Step 3 / 3 — Add & Save ──────────────────────────────────────────────
     added_ok:    list[str] = []
     no_image:    list[str] = []
     recent_done: list[str] = []
@@ -1329,20 +1291,12 @@ async def scrapeallbrainrots(
         return [container(
             txt("## Adding Brainrots..."),
             sep(),
-            txt(
-                f"**Step 3 / 3** — Saving To GitHub\n\n"
-                f"**Progress:** {bar}\n"
-                f"**Processing:** `{title_case(cur)}`\n\n"
-                f"**Recently Added:**\n{log}"
-            ),
+            txt(f"**Step 3 / 3** — Saving To GitHub\n\n**Progress:** {bar}\n**Processing:** `{title_case(cur)}`\n\n**Recently Added:**\n{log}"),
         )]
 
     for i, (name, img_url) in enumerate(to_add):
         await patch_msg(interaction, _progress(i, name))
-
         final_url: str | None = img_url or None
-
-        # For the few pets without images from the batch API, try scrape_pet_image
         if not final_url:
             try:
                 wikia_url, _ = await scrape_pet_image(name)
@@ -1350,7 +1304,6 @@ async def scrapeallbrainrots(
                     final_url = to_railway(wikia_url)
             except Exception:
                 pass
-
         if final_url:
             data[name] = final_url
             added_ok.append(name)
@@ -1358,7 +1311,6 @@ async def scrapeallbrainrots(
             await notify_pet_added(name, final_url)
         else:
             no_image.append(name)
-
         await asyncio.sleep(0.05)
 
     await patch_msg(interaction, [container(
@@ -1404,13 +1356,11 @@ async def scrapeallbrainrots(
 @discord.app_commands.describe(dry_run="Preview Only — Do Not Fix Anything")
 async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False):
     await interaction.response.defer(thinking=True, ephemeral=True)
-
     try:
         data, sha = await fetch_pets()
     except Exception as e:
         await send_v2(interaction, [container(txt("## GitHub Error"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
-    # Detect broken entries: empty URL, or URL that isn't Railway and isn't a valid wikia URL
     broken = {
         name: url for name, url in data.items()
         if not url or url.strip() == "" or (not is_railway(url) and not is_cdn(url) and not extract_wikia_url(url))
@@ -1434,12 +1384,11 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
 
     if dry_run: return
 
-    fixed_ok:   list[str] = []
-    still_fail: list[str] = []
-    broken_list = sorted(broken.items())
+    fixed_ok:    list[str] = []
+    still_fail:  list[str] = []
+    broken_list  = sorted(broken.items())
     broken_names = [n for n, _ in broken_list]
 
-    # ── Batch-fetch images via MediaWiki API (no Cloudflare) ─────────────────
     await patch_msg(interaction, [container(
         txt("## Refetching Broken Images..."),
         sep(),
@@ -1447,16 +1396,11 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
     )])
     img_map = await api_batch_images(broken_names)
 
-    # ── Apply results, scrape_pet_image fallback for misses ───────────────────
     for i, (name, _) in enumerate(broken_list):
         await patch_msg(interaction, [container(
             txt("## Refetching Broken Images..."),
             sep(),
-            txt(
-                f"**Progress:** {progress_bar(i, len(broken_list))}\n"
-                f"**Processing:** `{title_case(name)}`\n\n"
-                f"**Fixed:** {len(fixed_ok)}   **Still Broken:** {len(still_fail)}"
-            ),
+            txt(f"**Progress:** {progress_bar(i, len(broken_list))}\n**Processing:** `{title_case(name)}`\n\n**Fixed:** {len(fixed_ok)}   **Still Broken:** {len(still_fail)}"),
         )])
         url = img_map.get(name)
         if not url:
@@ -1473,7 +1417,6 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
             still_fail.append(name)
         await asyncio.sleep(0.05)
 
-    # Final 100% patch
     await patch_msg(interaction, [container(
         txt("## Pushing To GitHub..."),
         sep(),
@@ -1487,9 +1430,9 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
         push_ok = False; push_err = str(pe)
 
     if push_ok:
-        fixed_list   = "\n".join(f" `{title_case(n)}`" for n in fixed_ok[:20])
-        more_fixed   = f"\n*...And {len(fixed_ok)-20} More*" if len(fixed_ok) > 20 else ""
-        fail_list    = ("\n\n**Still No Image Found:**\n" + "\n".join(f" `{title_case(n)}`" for n in still_fail[:10])) if still_fail else ""
+        fixed_list = "\n".join(f" `{title_case(n)}`" for n in fixed_ok[:20])
+        more_fixed = f"\n*...And {len(fixed_ok)-20} More*" if len(fixed_ok) > 20 else ""
+        fail_list  = ("\n\n**Still No Image Found:**\n" + "\n".join(f" `{title_case(n)}`" for n in still_fail[:10])) if still_fail else ""
         await followup(interaction, [container(
             txt("## Refetch Broken  Done!"),
             sep(),
@@ -1512,7 +1455,6 @@ async def refetchbroken(interaction: discord.Interaction, dry_run: bool = False)
 @discord.app_commands.describe(dry_run="Preview Only — Do Not Save", overwrite_existing="Overwrite Pets That Already Have Valid Images (Default: Only Fetch Missing)")
 async def refetchall(interaction: discord.Interaction, dry_run: bool = False, overwrite_existing: bool = False):
     await interaction.response.defer(thinking=True, ephemeral=True)
-
     try:
         data, sha = await fetch_pets()
     except Exception as e:
@@ -1541,17 +1483,12 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
     if dry_run:
         preview = "\n".join(f" `{title_case(n)}`" for n in to_fetch[:25])
         more    = f"\n*...And {len(to_fetch)-25} More*" if len(to_fetch) > 25 else ""
-        await followup(interaction, [container(
-            txt("## Dry Run  Pets That Will Be Fetched"),
-            sep(),
-            txt(f"**{len(to_fetch)} Pet(s):**\n\n{preview}{more}"),
-        )])
+        await followup(interaction, [container(txt("## Dry Run  Pets That Will Be Fetched"), sep(), txt(f"**{len(to_fetch)} Pet(s):**\n\n{preview}{more}"))])
         return
 
     fetched_ok:   list[str] = []
     fetch_failed: list[str] = []
 
-    # ── Step 1: Batch-fetch images via MediaWiki API (no Cloudflare) ──────────
     await patch_msg(interaction, [container(
         txt("## Refetching All Pets..."),
         sep(),
@@ -1559,28 +1496,20 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
     )])
     img_map = await api_batch_images(to_fetch)
 
-    # ── Step 2: Apply results + scrape_pet_image fallback for misses ──────────
     for i, name in enumerate(to_fetch):
         await patch_msg(interaction, [container(
             txt("## Refetching All Pets..."),
             sep(),
-            txt(
-                f"**Progress:** {progress_bar(i, len(to_fetch))}\n"
-                f"**Processing:** `{title_case(name)}`\n\n"
-                f"**Success:** {len(fetched_ok)}    **Failed:** {len(fetch_failed)}"
-            ),
+            txt(f"**Progress:** {progress_bar(i, len(to_fetch))}\n**Processing:** `{title_case(name)}`\n\n**Success:** {len(fetched_ok)}    **Failed:** {len(fetch_failed)}"),
         )])
-
         url = img_map.get(name)
         if not url:
-            # Fallback: try scrape_pet_image for the few misses
             try:
                 wikia_url, _ = await scrape_pet_image(name)
                 if wikia_url:
                     url = to_railway(wikia_url)
             except Exception:
                 pass
-
         if url:
             data[name] = url
             fetched_ok.append(name)
@@ -1601,9 +1530,9 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
         push_ok = False; push_err = str(pe)
 
     if push_ok:
-        ok_list    = "\n".join(f" `{title_case(n)}`" for n in fetched_ok[:20])
-        more_ok    = f"\n*...And {len(fetched_ok)-20} More*" if len(fetched_ok) > 20 else ""
-        fail_txt   = ("\n\n**No Image Found:**\n" + "\n".join(f" `{title_case(n)}`" for n in fetch_failed[:10])) if fetch_failed else ""
+        ok_list  = "\n".join(f" `{title_case(n)}`" for n in fetched_ok[:20])
+        more_ok  = f"\n*...And {len(fetched_ok)-20} More*" if len(fetched_ok) > 20 else ""
+        fail_txt = ("\n\n**No Image Found:**\n" + "\n".join(f" `{title_case(n)}`" for n in fetch_failed[:10])) if fetch_failed else ""
         await followup(interaction, [container(
             txt("## Refetch All  Done!"),
             sep(),
@@ -1619,33 +1548,29 @@ async def refetchall(interaction: discord.Interaction, dry_run: bool = False, ov
     else:
         await followup(interaction, [container(txt("## GitHub Push Failed"), sep(), txt(f"**Error:**\n```\n{push_err[:300]}\n```"))])
 
-# ══════════════════════════  PREFIX COMMANDS & EVENTS  ══════════════════════════
-
 # ── Auto-Init GitHub Files ────────────────────────────────────────────────────
 
 async def ensure_files():
-    """Auto-Create GitHub Files If They Do Not Exist."""
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept":        "application/vnd.github.v3+json",
         "Content-Type":  "application/json",
     }
     files = [
-        (GITHUB_FILE,          "{}",  True),   # thumbnails.json  — JSON
-        (GITHUB_JSON_FILE,     "{}",  True),   # thumbnails1.json — JSON
-        (GITHUB_TRAITS_FILE,   "",    False),   # traits.lua       — Lua
-        (GITHUB_MUTATIONS_FILE,"",    False),   # mutations.lua    — Lua
+        (GITHUB_FILE,           "{}",  True),
+        (GITHUB_JSON_FILE,      "{}",  True),
+        (GITHUB_TRAITS_FILE,    "",    False),
+        (GITHUB_MUTATIONS_FILE, "",    False),
     ]
     for filename, empty_content, is_json in files:
         check_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
         async with aiohttp.ClientSession() as s:
             async with s.get(check_url, headers=headers) as r:
                 if r.status == 200:
-                    continue    # File Already Exists — Skip
+                    continue
                 if r.status != 404:
                     print(f"[DK] Could not check {filename}: HTTP {r.status}")
                     continue
-            # File Does Not Exist — Create It
             encoded    = base64.b64encode(empty_content.encode()).decode()
             body       = {"message": f"[DK] Init: Create {filename}", "content": encoded, "branch": GITHUB_BRANCH}
             create_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}"
@@ -1665,7 +1590,7 @@ async def sync_cmd(ctx: commands.Context):
 @bot.event
 async def on_ready():
     await tree.sync()
-    await ensure_files()                       # Auto-Create Files If Missing
+    await ensure_files()
     print(f"[DK] Logged In As: {bot.user}")
     print(f"[DK] Slash Commands Synced! ({len(tree.get_commands())} Commands)")
     print(f"[DK] GitHub Files:")
@@ -1673,6 +1598,7 @@ async def on_ready():
     print(f"[DK]    Traits:    {GITHUB_TRAITS_FILE}")
     print(f"[DK]    Mutations: {GITHUB_MUTATIONS_FILE}")
     print(f"[DK] Max Emoji Slots: Dynamic (Based On Boost Tier)")
+
 # ── /Savetraits ───────────────────────────────────────────────────────────────
 
 @tree.command(name="savetraits", description="Scrape Traits From Wiki & Sync Emoji IDs To GitHub (traits.lua).")
@@ -1687,9 +1613,9 @@ async def savetraits(interaction: discord.Interaction):
     if not traits:
         await followup(interaction, [container(txt("## No Traits Found"), sep(), txt("Could Not Find Any Traits On The Wiki Page."))]); return
     try:
-        m_em, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        m_em, _      = await gh_fetch(GITHUB_MUTATIONS_FILE)
         emoji_map, _ = await gh_fetch(GITHUB_TRAITS_FILE)
-        emoji_map = {**emoji_map, **m_em}
+        emoji_map    = {**emoji_map, **m_em}
     except Exception:
         emoji_map = {}
     try:
@@ -1698,8 +1624,8 @@ async def savetraits(interaction: discord.Interaction):
         existing, sha = {}, ""
     data = dict(existing)
     for name, _ in traits:
-        if name in emoji_map: data[name] = emoji_map[name]
-        elif name not in data: data[name] = ""
+        if name in emoji_map:   data[name] = emoji_map[name]
+        elif name not in data:  data[name] = ""
     try:
         await gh_push(GITHUB_TRAITS_FILE, data, sha, f"[DK] Traits: Synced {len(data)} Entries")
         ok = True
@@ -1718,7 +1644,7 @@ async def savetraits(interaction: discord.Interaction):
             txt(f"**Preview:**\n```lua\n{preview}\n```"),
         )])
     else:
-        await followup(interaction, [container(txt("## Failed To Save Traits"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+        await followup(interaction, [container(txt("## Failed To Save Traits"), sep(), txt(f"**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
 # ── /Savemutations ────────────────────────────────────────────────────────────
 
@@ -1734,9 +1660,9 @@ async def savemutations(interaction: discord.Interaction):
     if not mutations:
         await followup(interaction, [container(txt("## No Mutations Found"), sep(), txt("Could Not Find Any Mutations On The Wiki Page."))]); return
     try:
-        t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        t_em, _      = await gh_fetch(GITHUB_TRAITS_FILE)
         emoji_map, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
-        emoji_map = {**t_em, **emoji_map}
+        emoji_map    = {**t_em, **emoji_map}
     except Exception:
         emoji_map = {}
     try:
@@ -1745,8 +1671,8 @@ async def savemutations(interaction: discord.Interaction):
         existing, sha = {}, ""
     data = dict(existing)
     for name, _ in mutations:
-        if name in emoji_map: data[name] = emoji_map[name]
-        elif name not in data: data[name] = ""
+        if name in emoji_map:   data[name] = emoji_map[name]
+        elif name not in data:  data[name] = ""
     try:
         await gh_push(GITHUB_MUTATIONS_FILE, data, sha, f"[DK] Mutations: Synced {len(data)} Entries")
         ok = True
@@ -1765,7 +1691,7 @@ async def savemutations(interaction: discord.Interaction):
             txt(f"**Preview:**\n```lua\n{preview}\n```"),
         )])
     else:
-        await followup(interaction, [container(txt("## Failed To Save Mutations"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+        await followup(interaction, [container(txt("## Failed To Save Mutations"), sep(), txt(f"**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
 # ── /Listtraits ───────────────────────────────────────────────────────────────
 
@@ -1773,15 +1699,15 @@ async def savemutations(interaction: discord.Interaction):
 @discord.app_commands.default_permissions(administrator=True)
 async def listtraits(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
-    await followup(interaction, [container(txt("## Scanning Traits Wiki Page..."), sep(), txt(" Scraping `stealabrainrot.fandom.com/wiki/Traits`  Please Wait..."))])
+    await followup(interaction, [container(txt("## Scanning Traits Wiki Page..."), sep(), txt("Scraping `stealabrainrot.fandom.com/wiki/Traits`  Please Wait..."))])
     try:
         traits = await scrape_traits()
     except Exception as e:
         await followup(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
     if not traits:
-        await followup(interaction, [container(txt("## No Traits Found"), sep(), txt("Could Not Find Any Traits On The Wiki Page.\n\n The Page Layout May Have Changed."))]); return
+        await followup(interaction, [container(txt("## No Traits Found"), sep(), txt("Could Not Find Any Traits On The Wiki Page."))]); return
     with_thumb = sum(1 for _, u in traits if u)
-    await followup(interaction, [container(txt("## Traits List"), sep(), txt(f"**Total:** {len(traits)}    **With Thumbnail:** {with_thumb}    **No Image:** {len(traits)-with_thumb}\n\n **Loading All Below...**"))])
+    await followup(interaction, [container(txt("## Traits List"), sep(), txt(f"**Total:** {len(traits)}    **With Thumbnail:** {with_thumb}    **No Image:** {len(traits)-with_thumb}\n\n**Loading All Below...**"))])
     for i in range(0, len(traits), 5):
         chunk = traits[i:i+5]
         items = []
@@ -1799,15 +1725,15 @@ async def listtraits(interaction: discord.Interaction):
 @discord.app_commands.default_permissions(administrator=True)
 async def listmutations(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
-    await followup(interaction, [container(txt("##  Scanning Mutations Wiki Page..."), sep(), txt(" Scraping `stealabrainrot.fandom.com/wiki/Mutations`  Please Wait..."))])
+    await followup(interaction, [container(txt("## Scanning Mutations Wiki Page..."), sep(), txt("Scraping `stealabrainrot.fandom.com/wiki/Mutations`  Please Wait..."))])
     try:
         mutations = await scrape_mutations()
     except Exception as e:
         await followup(interaction, [container(txt("## Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
     if not mutations:
-        await followup(interaction, [container(txt("## No Mutations Found"), sep(), txt("Could Not Find Any Mutations On The Wiki Page.\n\n The Page Layout May Have Changed."))]); return
+        await followup(interaction, [container(txt("## No Mutations Found"), sep(), txt("Could Not Find Any Mutations On The Wiki Page."))]); return
     with_thumb = sum(1 for _, u in mutations if u)
-    await followup(interaction, [container(txt("##  Mutations List"), sep(), txt(f"**Total:** {len(mutations)}    **With Thumbnail:** {with_thumb}    **No Image:** {len(mutations)-with_thumb}\n\n **Loading All Below...**"))])
+    await followup(interaction, [container(txt("## Mutations List"), sep(), txt(f"**Total:** {len(mutations)}    **With Thumbnail:** {with_thumb}    **No Image:** {len(mutations)-with_thumb}\n\n**Loading All Below...**"))])
     for i in range(0, len(mutations), 5):
         chunk = mutations[i:i+5]
         items = []
@@ -1838,19 +1764,19 @@ async def addemojis(interaction: discord.Interaction, emoji_data: str):
     new_entries       = {k: v for k, v in parsed.items() if k not in data}
     overwrite_entries = {k: v for k, v in parsed.items() if k in data}
     for k, v in parsed.items():
-        if k in t_data: t_data[k] = v
-        if k in m_data: m_data[k] = v
-        if k not in t_data and k not in m_data: t_data[k] = v  # Default to traits
+        if k in t_data:                     t_data[k] = v
+        if k in m_data:                     m_data[k] = v
+        if k not in t_data and k not in m_data: t_data[k] = v
     try:
-        await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] Emojis Added: {', '.join(list(parsed.keys())[:5])}")
+        await gh_push(GITHUB_TRAITS_FILE,    t_data, t_sha, f"[DK] Emojis Added: {', '.join(list(parsed.keys())[:5])}")
         await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] Emojis Added: {', '.join(list(parsed.keys())[:5])}")
         ok = True
     except Exception as e:
         ok = False; err = str(e)
     if not ok:
-        await send_v2(interaction, [container(txt("## Failed To Save Emojis"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))]); return
-    max_len     = max((len(k) for k in parsed), default=0)
-    lua_lines   = []
+        await send_v2(interaction, [container(txt("## Failed To Save Emojis"), sep(), txt(f"**GitHub** Push Failed\n```\n{err[:200]}\n```"))]); return
+    max_len   = max((len(k) for k in parsed), default=0)
+    lua_lines = []
     for k, v in sorted(parsed.items(), key=lambda x: x[0].lower()):
         ek  = k.replace("\\", "\\\\").replace('"', '\\"')
         ev  = v.replace("\\", "\\\\").replace('"', '\\"')
@@ -1860,8 +1786,11 @@ async def addemojis(interaction: discord.Interaction, emoji_data: str):
     if len(lua_lines) > 30: lua_preview += f"\n    ... And {len(lua_lines)-30} More"
     new_list = "\n".join(f" `{k}`  `{v}`" for k in sorted(new_entries)[:15])
     ow_list  = "\n".join(f" `{k}`  `{v}`" for k in sorted(overwrite_entries)[:10])
-    summary  = "\n".join(p for p in [f"**{len(new_entries)} New** Emoji(s) Added." if new_entries else "", f"**{len(overwrite_entries)} Existing** Emoji(s) Overwritten." if overwrite_entries else ""] if p)
-    items    = [txt("## Emojis Saved Successfully"), sep(), txt(f"{summary}\n\n**GitHub Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`\n**Pushed & Sorted A To Z**")]
+    summary  = "\n".join(p for p in [
+        f"**{len(new_entries)} New** Emoji(s) Added." if new_entries else "",
+        f"**{len(overwrite_entries)} Existing** Emoji(s) Overwritten." if overwrite_entries else "",
+    ] if p)
+    items = [txt("## Emojis Saved Successfully"), sep(), txt(f"{summary}\n\n**GitHub Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`\n**Pushed & Sorted A To Z**")]
     if new_list:  items += [sep(), txt(f"**New Entries:**\n{new_list}")]
     if ow_list:   items += [sep(), txt(f"**Overwritten:**\n{ow_list}")]
     items += [sep(), txt(f"**Lua Preview:**\n```lua\n{lua_preview}\n```")]
@@ -1911,16 +1840,16 @@ async def getemojis(interaction: discord.Interaction):
     mutation_names = [n for n, _ in mutations]
     def status_lines(names):
         return "\n".join(
-            f"`{'' if n in existing_emojis else ''}` **{n}**{f'    {existing_emojis[n]}' if n in existing_emojis else ''}"
+            f"`{'✓' if n in existing_emojis else '✗'}` **{n}**{f'    {existing_emojis[n]}' if n in existing_emojis else ''}"
             for n in names
         )
     mapped_t   = [n for n in trait_names    if n in existing_emojis]
     unmapped_t = [n for n in trait_names    if n not in existing_emojis]
     mapped_m   = [n for n in mutation_names if n in existing_emojis]
     unmapped_m = [n for n in mutation_names if n not in existing_emojis]
-    await followup(interaction, [container(txt("## Traits  Emoji Status"), sep(), txt(f"**{len(trait_names)} Traits    Mapped: {len(mapped_t)}    Missing: {len(unmapped_t)}**\n\n{status_lines(trait_names)}\n\nMapped / Missing"))])
+    await followup(interaction, [container(txt("## Traits  Emoji Status"), sep(), txt(f"**{len(trait_names)} Traits    Mapped: {len(mapped_t)}    Missing: {len(unmapped_t)}**\n\n{status_lines(trait_names)}"))])
     await asyncio.sleep(0.5)
-    await followup(interaction, [container(txt("## Mutations  Emoji Status"), sep(), txt(f"**{len(mutation_names)} Mutations    Mapped: {len(mapped_m)}    Missing: {len(unmapped_m)}**\n\n{status_lines(mutation_names)}\n\nMapped / Missing"))])
+    await followup(interaction, [container(txt("## Mutations  Emoji Status"), sep(), txt(f"**{len(mutation_names)} Mutations    Mapped: {len(mapped_m)}    Missing: {len(unmapped_m)}**\n\n{status_lines(mutation_names)}"))])
     await asyncio.sleep(0.5)
     if unmapped_t:
         await followup(interaction, [container(txt("## Unmapped Traits"), sep(), txt(f"**{len(unmapped_t)} Traits Still Need Emoji IDs:**\n\n```\n{chr(10).join(unmapped_t)[:1800]}\n```\n\nUse `/addemojis` To Bulk-Add."))])
@@ -1928,8 +1857,6 @@ async def getemojis(interaction: discord.Interaction):
     if unmapped_m:
         await followup(interaction, [container(txt("## Unmapped Mutations"), sep(), txt(f"**{len(unmapped_m)} Mutations Still Need Emoji IDs:**\n\n```\n{chr(10).join(unmapped_m)[:1800]}\n```\n\nUse `/addemojis` To Bulk-Add."))])
         await asyncio.sleep(0.5)
-    total        = len(trait_names) + len(mutation_names)
-    total_mapped = len(mapped_t) + len(mapped_m)
     await followup(interaction, [container(txt("## Summary"), sep(), txt(f"**GitHub Files:** `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`"))])
 
 # ── /Deleteemoji ──────────────────────────────────────────────────────────────
@@ -1953,7 +1880,7 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
     if name in t_data: t_data.pop(name)
     if name in m_data: m_data.pop(name)
     try:
-        await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] Emoji Deleted: {name}")
+        await gh_push(GITHUB_TRAITS_FILE,    t_data, t_sha, f"[DK] Emoji Deleted: {name}")
         await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] Emoji Deleted: {name}")
         ok = True
     except Exception as e:
@@ -1961,7 +1888,7 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
     if ok:
         await send_v2(interaction, [container(txt("## Emoji Deleted"), sep(), txt(f"**Name:** `{name}`\n**Deleted Value:** `{deleted_val}`\n\n**GitHub** — Pushed & Sorted A To Z\n**Remaining:** {len(data)} Emojis"))])
     else:
-        await send_v2(interaction, [container(txt("## Failed To Delete Emoji"), sep(), txt(f"**Name:** `{name}`\n\n **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+        await send_v2(interaction, [container(txt("## Failed To Delete Emoji"), sep(), txt(f"**Name:** `{name}`\n\n**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
 # ── /Clearemojis ──────────────────────────────────────────────────────────────
 
@@ -1969,9 +1896,9 @@ async def deleteemoji(interaction: discord.Interaction, name: str):
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(target="Which File(s) To Clear")
 @discord.app_commands.choices(target=[
-    discord.app_commands.Choice(name="traits.lua Only",               value="traits"),
-    discord.app_commands.Choice(name="mutations.lua Only",            value="mutations"),
-    discord.app_commands.Choice(name="traits.lua + mutations.lua",    value="both"),
+    discord.app_commands.Choice(name="traits.lua Only",            value="traits"),
+    discord.app_commands.Choice(name="mutations.lua Only",         value="mutations"),
+    discord.app_commands.Choice(name="traits.lua + mutations.lua", value="both"),
 ])
 async def clearemojis(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -1983,17 +1910,15 @@ async def clearemojis(interaction: discord.Interaction, target: str = "all"):
     wh_url  = webhook_url(interaction)
     payload = {
         "flags": FLAGS_V2,
-        "components": [
-            container(
-                txt("## Confirm Clear Emoji IDs"),
-                sep(),
-                txt(f"**About To Clear All Emoji IDs In:**\n{files_desc.get(target, target)}"),
-                sep(),
-                txt("⚠️ **This Action Cannot Be Undone — Are You Sure?**"),
-                sep(),
-                action_row(btn_yes(f"clearemojis_yes:{target}"), btn_no("clearemojis_no")),
-            ),
-        ],
+        "components": [container(
+            txt("## Confirm Clear Emoji IDs"),
+            sep(),
+            txt(f"**About To Clear All Emoji IDs In:**\n{files_desc.get(target, target)}"),
+            sep(),
+            txt("⚠️ **This Action Cannot Be Undone — Are You Sure?**"),
+            sep(),
+            action_row(btn_yes(f"clearemojis_yes:{target}"), btn_no("clearemojis_no")),
+        )],
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
@@ -2011,7 +1936,6 @@ async def syncemojis(interaction: discord.Interaction):
         t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
         m_em, _ = await gh_fetch(GITHUB_MUTATIONS_FILE)
         traits, mutations, existing_emojis = traits_res, mutations_res, {**t_em, **m_em}
-        sha = ""  # Not needed — we push to individual files
     except Exception as e:
         await followup(interaction, [container(txt("## Error"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
     trait_names    = [n for n, _ in traits]
@@ -2020,7 +1944,7 @@ async def syncemojis(interaction: discord.Interaction):
     unmapped       = [n for n in all_names if n not in existing_emojis]
     mapped         = [n for n in all_names if n in existing_emojis]
     if not unmapped:
-        await followup(interaction, [container(txt("## All Names Are Fully Mapped"), sep(), txt(f"**{len(all_names)} Names** All Have Emoji IDs In `{GITHUB_TRAITS_FILE}` + `{GITHUB_MUTATIONS_FILE}`. Nothing To Add!"))]); return
+        await followup(interaction, [container(txt("## All Names Are Fully Mapped"), sep(), txt(f"**{len(all_names)} Names** All Have Emoji IDs. Nothing To Add!"))]); return
     unmapped_block = "\n".join(unmapped)
     await followup(interaction, [container(txt("## Names Missing Emoji IDs"), sep(), txt(f"**{len(unmapped)} / {len(all_names)} Names Need Emoji IDs:**\n\n```\n{unmapped_block[:1800]}\n```\n\nAdd `:emoji_id` After Each Name, Then Run `/addemojis`"))])
     if mapped:
@@ -2047,11 +1971,10 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     guild_id  = interaction.guild.id
     bot_token = BOT_TOKEN
 
-    # Get Available Emoji Slots — fetch guild to get real boost tier
     async with aiohttp.ClientSession() as s:
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers={"Authorization": f"Bot {bot_token}"}) as rg:
-            tier       = (await rg.json()).get("premium_tier", 0) if rg.status == 200 else 0
-        max_slots  = max_emoji_slots(tier)
+            tier      = (await rg.json()).get("premium_tier", 0) if rg.status == 200 else 0
+        max_slots = max_emoji_slots(tier)
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}/emojis", headers={"Authorization": f"Bot {bot_token}"}) as r:
             if r.status == 200:
                 current_emojis = await r.json()
@@ -2077,7 +2000,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         await followup(interaction, [container(txt("## Wiki Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
     try:
-        t_em, _ = await gh_fetch(GITHUB_TRAITS_FILE)
+        t_em, _         = await gh_fetch(GITHUB_TRAITS_FILE)
         m_em, emoji_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
         existing_emojis = {**t_em, **m_em}
     except Exception as e:
@@ -2095,25 +2018,24 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     no_image  = [(n, t) for n, t in candidates if not t]
     to_upload = [(n, t) for n, t in candidates if t]
 
-    # Limit By Available Slots
     skipped_by_limit = []
     if len(to_upload) > slots_free:
         skipped_by_limit = [n for n, _ in to_upload[slots_free:]]
         to_upload        = to_upload[:slots_free]
 
-    await followup(interaction, [container(txt("##  Auto Emoji  Plan"), sep(), txt(
-        f" **Traits Scraped:** {len(traits_data)}     **Mutations Scraped:** {len(mutations_data)}\n"
-        f" **To Upload:** {len(to_upload)}     **No Image (Skip):** {len(no_image)}\n"
-        f" **Already Mapped (Skipped):** {len(seen)-len(candidates) if skip_existing else 0}\n"
-        + (f" **Slot Full  Cannot Upload ({len(skipped_by_limit)}):** {', '.join(f'`{n}`' for n in skipped_by_limit[:10])}{'...' if len(skipped_by_limit)>10 else ''}\n" if skipped_by_limit else "")
-        + f"\n **Step 2/4:** Downloading, Resizing & Uploading To `{interaction.guild.name}`..."
+    await followup(interaction, [container(txt("## Auto Emoji  Plan"), sep(), txt(
+        f"**Traits Scraped:** {len(traits_data)}     **Mutations Scraped:** {len(mutations_data)}\n"
+        f"**To Upload:** {len(to_upload)}     **No Image (Skip):** {len(no_image)}\n"
+        f"**Already Mapped (Skipped):** {len(seen)-len(candidates) if skip_existing else 0}\n"
+        + (f"**Slot Full — Cannot Upload ({len(skipped_by_limit)}):** {', '.join(f'`{n}`' for n in skipped_by_limit[:10])}{'...' if len(skipped_by_limit)>10 else ''}\n" if skipped_by_limit else "")
+        + f"\n**Step 2/4:** Downloading, Resizing & Uploading To `{interaction.guild.name}`..."
     ))])
 
     if not to_upload:
         msg = "All Items Either Have No Image, Or Are Already Mapped."
         if skipped_by_limit:
-            msg += f"\n\n **Server Is Full ({slots_used}/{max_slots})!**\nUse `/deleteserveremojis` To Free Up Slots First."
-        await followup(interaction, [container(txt("##  Nothing To Upload"), sep(), txt(f"{msg}\n\n Run `/getemojis` To See Current Status."))]); return
+            msg += f"\n\n**Server Is Full ({slots_used}/{max_slots})!**\nUse `/deleteserveremojis` To Free Up Slots First."
+        await followup(interaction, [container(txt("## Nothing To Upload"), sep(), txt(f"{msg}\n\nRun `/getemojis` To See Current Status."))]); return
 
     uploaded_ok:   list[tuple[str, str]] = []
     failed_upload: list[str]             = []
@@ -2175,20 +2097,14 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                 break
             await asyncio.sleep(3.0)
 
-    # Step 3: Show confirm dialog — ask before saving to GitHub
     ok_preview   = "\n".join(f"{es}  `{n}`" for n, es in uploaded_ok[:30])
     if len(uploaded_ok) > 30: ok_preview += f"\n*...And {len(uploaded_ok)-30} More*"
     all_not_done = failed_dl + list(failed_upload)
-    fail_txt     = ""
-    if all_not_done:
-        fail_txt = "\n\n**Failed:**\n" + "\n".join(f"• {e}" for e in all_not_done[:10])
-    no_img_txt = ""
-    if no_image:
-        no_img_names = ", ".join(f"`{n}`" for n, _ in no_image[:15])
-        no_img_txt   = f"\n\n**No Image ({len(no_image)}):** {no_img_names}"
-    skipped_txt = ""
+    fail_txt     = ("\n\n**Failed:**\n" + "\n".join(f"• {e}" for e in all_not_done[:10])) if all_not_done else ""
+    no_img_txt   = (f"\n\n**No Image ({len(no_image)}):** " + ", ".join(f"`{n}`" for n, _ in no_image[:15])) if no_image else ""
+    skipped_txt  = ""
     if skipped_by_limit:
-        skipped_txt = f"\n\n**Server Full — Not Uploaded ({len(skipped_by_limit)}):**\n"
+        skipped_txt  = f"\n\n**Server Full — Not Uploaded ({len(skipped_by_limit)}):**\n"
         skipped_txt += "\n".join(f"• `{n}`" for n in skipped_by_limit[:20])
         if len(skipped_by_limit) > 20: skipped_txt += f"\n*...And {len(skipped_by_limit)-20} More*"
 
@@ -2232,29 +2148,27 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.describe(mode="Which Emojis To Delete")
 @discord.app_commands.choices(mode=[
-    discord.app_commands.Choice(name="All Emojis In Server",           value="all"),
-    discord.app_commands.Choice(name="Only Emojis Uploaded By Bot",    value="bot_only"),
+    discord.app_commands.Choice(name="All Emojis In Server",        value="all"),
+    discord.app_commands.Choice(name="Only Emojis Uploaded By Bot", value="bot_only"),
 ])
 async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"):
     if interaction.guild is None:
-        await interaction.response.send_message(" Must Be Used Inside A Server!", ephemeral=True); return
+        await interaction.response.send_message("Must Be Used Inside A Server!", ephemeral=True); return
     await interaction.response.defer(thinking=True, ephemeral=True)
     wh_url  = webhook_url(interaction)
     payload = {
         "flags": FLAGS_V2,
-        "components": [
-            container(
-                txt("## Confirm Delete Server Emojis"),
-                sep(),
-                txt(f"**Mode:** `{'All Emojis In Server' if mode == 'all' else 'Only Bot-Uploaded Emojis'}`"),
-                sep(),
-                txt(f"⚠️ **This Will Permanently Delete Emojis From `{interaction.guild.name}`!**\nThis Action Cannot Be Undone."),
-                sep(),
-                txt("**Are You Sure You Want To Continue?**"),
-                sep(),
-                action_row(btn_yes(f"delserver_yes:{mode}"), btn_no("delserver_no")),
-            ),
-        ],
+        "components": [container(
+            txt("## Confirm Delete Server Emojis"),
+            sep(),
+            txt(f"**Mode:** `{'All Emojis In Server' if mode == 'all' else 'Only Bot-Uploaded Emojis'}`"),
+            sep(),
+            txt(f"⚠️ **This Will Permanently Delete Emojis From `{interaction.guild.name}`!**\nThis Action Cannot Be Undone."),
+            sep(),
+            txt("**Are You Sure You Want To Continue?**"),
+            sep(),
+            action_row(btn_yes(f"delserver_yes:{mode}"), btn_no("delserver_no")),
+        )],
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(wh_url, json=payload) as r:
@@ -2267,11 +2181,10 @@ async def deleteserveremojis(interaction: discord.Interaction, mode: str = "all"
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component: return
     custom_id = interaction.data.get("custom_id", "")
-    # Defer immediately to avoid Unknown Interaction (3s timeout)
     try:
         await interaction.response.defer()
     except Exception:
-        pass  # Already deferred or expired
+        pass
 
     # ── Delete Pet ────────────────────────────────────────────────────────────
 
@@ -2287,12 +2200,16 @@ async def on_interaction(interaction: discord.Interaction):
         except Exception as e:
             ok = False; err = str(e)
         if ok:
-            await patch_msg(interaction, [container(txt("## Pet Deleted Successfully"), sep(), section(f"**{name}**\n\n**Deleted URL:**\n```\n{shorten(deleted_url, 240)}\n```", deleted_url), sep(), txt(f" **GitHub**   Deleted & Sorted AZ\n**Remaining Pets:** {len(data)}"))])
+            await patch_msg(interaction, [container(
+                txt("## Pet Deleted Successfully"), sep(),
+                section(f"**{name}**\n\n**Deleted URL:**\n```\n{shorten(deleted_url, 240)}\n```", deleted_url),
+                sep(),
+                txt(f"**GitHub** Deleted & Sorted A-Z\n**Remaining Pets:** {len(data)}"),
+            )])
         else:
-            await patch_msg(interaction, [container(txt("## Failed To Delete Pet"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+            await patch_msg(interaction, [container(txt("## Failed To Delete Pet"), sep(), txt(f"**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
     elif custom_id == "delbrainrot_no":
-        getattr(bot, "_delpet_pending", {})
         await patch_msg(interaction, [container(txt("## Delete Cancelled"), sep(), txt("No Changes Were Made."))])
 
     # ── Fetchpet Overwrite ────────────────────────────────────────────────────
@@ -2310,10 +2227,15 @@ async def on_interaction(interaction: discord.Interaction):
             ok = False; err = str(e)
         extra = f"\n\n**Previous URL:**\n```\n{shorten(old_url, 200)}\n```" if old_url else ""
         if ok:
-            await patch_msg(interaction, [container(txt("## Brainrot Image Updated Successfully"), sep(), section(f"**{pet_name}**\n\n**Railway URL:**\n```\n{shorten(railway_url)}\n```{extra}", railway_url), sep(), txt("**GitHub**  Pushed & Sorted A To Z"))])
+            await patch_msg(interaction, [container(
+                txt("## Brainrot Image Updated Successfully"), sep(),
+                section(f"**{pet_name}**\n\n**Railway URL:**\n```\n{shorten(railway_url)}\n```{extra}", railway_url),
+                sep(),
+                txt("**GitHub** Pushed & Sorted A To Z"),
+            )])
             await notify_pet_added(pet_name, railway_url)
         else:
-            await patch_msg(interaction, [container(txt("## Failed To Save Pet"), sep(), txt(f" **GitHub**   Push Failed\n```\n{err[:200]}\n```"))])
+            await patch_msg(interaction, [container(txt("## Failed To Save Pet"), sep(), txt(f"**GitHub** Push Failed\n```\n{err[:200]}\n```"))])
 
     elif custom_id.startswith("overwrite_no:"):
         pet_name = custom_id[len("overwrite_no:"):]
@@ -2321,14 +2243,14 @@ async def on_interaction(interaction: discord.Interaction):
         exist    = info["data"].get(pet_name, "") if info else ""
         await patch_msg(interaction, [container(
             txt("## Overwrite Cancelled"), sep(),
-            section(f"**{pet_name}**\n\n**Kept Existing URL:**\n```\n{shorten(exist)}\n```", exist) if exist else txt(f"**{pet_name}**  Kept Existing Entry."),
+            section(f"**{pet_name}**\n\n**Kept Existing URL:**\n```\n{shorten(exist)}\n```", exist) if exist else txt(f"**{pet_name}** — Kept Existing Entry."),
         )])
 
     # ── Sync Pets ─────────────────────────────────────────────────────────────
 
     elif custom_id == "syncbrainrots_yes":
         pending = getattr(bot, "_syncpets_pending", {}).pop("latest", None)
-        if not pending: await interaction.response.send_message("Session Expired.", ephemeral=True); return
+        if not pending: await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run The Command Again."))]); return
         data       = pending["data"]; sha = pending["sha"]
         to_convert = pending["to_convert"]; to_refetch = pending["to_refetch"]
         total      = len(to_convert) + len(to_refetch); done = 0
@@ -2340,7 +2262,6 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as ce:
                 failed_list.append(f"{cname}: {ce}")
             done += 1
-        # Batch-fetch images for re-fetch list via API (no Cloudflare)
         refetch_img_map = await api_batch_images(list(to_refetch)) if to_refetch else {}
         for cname in to_refetch:
             await patch_msg(interaction, [container(txt("## Syncing..."), sep(), txt(f"**Progress:** {progress_bar(done, total)}\n\n**Processing:** `{cname}` *(Re-Fetch)*"))])
@@ -2362,28 +2283,28 @@ async def on_interaction(interaction: discord.Interaction):
         if push_ok:
             preview  = "\n".join(f" `{n}`" for n in sorted(converted_list)[:20])
             more     = f"\n*...And {len(converted_list)-20} More*" if len(converted_list) > 20 else ""
-            fail_txt = ("\n\n **Failed:**\n" + "\n".join(f" {x}" for x in failed_list[:5])) if failed_list else ""
-            await patch_msg(interaction, [container(txt("## Sync Complete"), sep(), txt(f"**Converted {len(converted_list)} Pet(s) To Railway:**\n\n{preview}{more}{fail_txt}\n\n**GitHub**  Pushed & Sorted A To Z"))])
+            fail_txt = ("\n\n**Failed:**\n" + "\n".join(f" {x}" for x in failed_list[:5])) if failed_list else ""
+            await patch_msg(interaction, [container(txt("## Sync Complete"), sep(), txt(f"**Converted {len(converted_list)} Pet(s) To Railway:**\n\n{preview}{more}{fail_txt}\n\n**GitHub** Pushed & Sorted A To Z"))])
         else:
-            await patch_msg(interaction, [container(txt("## Sync Failed"), sep(), txt(f" **GitHub Push Failed:**\n```\n{push_err[:300]}\n```"))])
+            await patch_msg(interaction, [container(txt("## Sync Failed"), sep(), txt(f"**GitHub Push Failed:**\n```\n{push_err[:300]}\n```"))])
 
     elif custom_id == "syncbrainrots_no":
         getattr(bot, "_syncpets_pending", {}).pop("latest", None)
         await patch_msg(interaction, [container(txt("## Sync Cancelled"), sep(), txt("No Changes Were Made To GitHub."))])
 
-    # ── Clear Emojis GitHub ───────────────────────────────────────────────────
+    # ── Clear Emojis ──────────────────────────────────────────────────────────
 
     elif custom_id.startswith("clearemojis_yes:"):
-        target = custom_id[len("clearemojis_yes:"):]
+        target  = custom_id[len("clearemojis_yes:"):]
         results = []
         async def clear_file(filename: str, label: str):
             try:
                 _, sha = await gh_fetch(filename)
                 await gh_push(filename, {}, sha, f"[DK] Cleared All Emoji IDs: {filename}")
-                results.append(f" `{label}`  Cleared Successfully")
+                results.append(f"`{label}` — Cleared Successfully")
             except Exception as e:
-                results.append(f" `{label}`  Error: {str(e)[:80]}")
-        if target == "traits":  await clear_file(GITHUB_TRAITS_FILE, "traits.lua")
+                results.append(f"`{label}` — Error: {str(e)[:80]}")
+        if target == "traits":      await clear_file(GITHUB_TRAITS_FILE, "traits.lua")
         elif target == "mutations": await clear_file(GITHUB_MUTATIONS_FILE, "mutations.lua")
         elif target == "both":
             await clear_file(GITHUB_TRAITS_FILE, "traits.lua")
@@ -2391,7 +2312,7 @@ async def on_interaction(interaction: discord.Interaction):
         result_txt = "\n".join(results)
         await patch_msg(interaction, [container(
             txt("## Clear Emojis  Done"), sep(),
-            txt(f"{result_txt}\n\n Run `/autoemojis` To Upload New Emojis\nThen `/savetraits` + `/savemutations` To Sync New IDs."),
+            txt(f"{result_txt}\n\nRun `/autoemojis` To Upload New Emojis\nThen `/savetraits` + `/savemutations` To Sync New IDs."),
         )])
 
     elif custom_id == "clearemojis_no":
@@ -2402,7 +2323,7 @@ async def on_interaction(interaction: discord.Interaction):
     elif custom_id.startswith("delserver_yes:"):
         mode     = custom_id[len("delserver_yes:"):]
         guild_id = getattr(bot, "_delserver_guild", None) or (interaction.guild.id if interaction.guild else None)
-        if not guild_id: await interaction.response.send_message("Session Expired.", ephemeral=True); return
+        if not guild_id: await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run The Command Again."))]); return
         headers = {"Authorization": f"Bot {BOT_TOKEN}"}
         await patch_msg(interaction, [container(txt("## Deleting Server Emojis..."), sep(), txt("Fetching Emoji List From Server..."))])
         async with aiohttp.ClientSession() as session:
@@ -2428,13 +2349,13 @@ async def on_interaction(interaction: discord.Interaction):
                 to_delete = server_emojis
             if not to_delete:
                 await patch_msg(interaction, [container(txt("## No Matching Emojis Found"), sep(), txt(f"No Emojis Match The Selected Mode: `{mode}`"))]); return
-            await patch_msg(interaction, [container(txt("## Deleting..."), sep(), txt(f"**Total In Server:** {len(server_emojis)}\n**Will Delete:** {len(to_delete)}\n\n Deleting..."))])
+            await patch_msg(interaction, [container(txt("## Deleting..."), sep(), txt(f"**Total In Server:** {len(server_emojis)}\n**Will Delete:** {len(to_delete)}\n\nDeleting..."))])
             deleted_ok = []; deleted_fail = []
             for i, emoji in enumerate(to_delete):
                 eid = emoji["id"]; ename = emoji["name"]
                 if i % 10 == 0 and i > 0:
                     bar = progress_bar(i, len(to_delete))
-                    await patch_msg(interaction, [container(txt(f" **Deleting...** {bar}\n Done: {len(deleted_ok)}     Failed: {len(deleted_fail)}"))])
+                    await patch_msg(interaction, [container(txt(f"**Deleting...** {bar}\nDone: {len(deleted_ok)}     Failed: {len(deleted_fail)}"))])
                 for attempt in range(3):
                     async with session.delete(f"https://discord.com/api/v10/guilds/{guild_id}/emojis/{eid}", headers=headers) as r:
                         if r.status == 204: deleted_ok.append(ename); break
@@ -2448,14 +2369,13 @@ async def on_interaction(interaction: discord.Interaction):
                             deleted_fail.append(f"{ename} (HTTP {r.status}: {err_body[:80]})"); break
                 else: deleted_fail.append(f"{ename} (Rate Limited)")
                 await asyncio.sleep(0.3)
-        fail_txt = ""
-        if deleted_fail: fail_txt = "\n\n**Failed To Delete:**\n" + "\n".join(f" `{x}`" for x in deleted_fail[:10])
+        fail_txt = ("\n\n**Failed To Delete:**\n" + "\n".join(f" `{x}`" for x in deleted_fail[:10])) if deleted_fail else ""
         await patch_msg(interaction, [container(
             txt("## Server Emojis Deleted"), sep(),
             txt(
                 f"**Deleted:** {len(deleted_ok)} Emojis\n"
                 f"**Failed:** {len(deleted_fail)} Emojis\n"
-                f" **Remaining In Server:** {len(server_emojis)-len(deleted_ok)} Emojis"
+                f"**Remaining In Server:** {len(server_emojis)-len(deleted_ok)} Emojis"
                 f"{fail_txt}\n\n"
                 f"Run `/autoemojis skip_existing:False` To Upload New Emojis."
             ),
@@ -2464,13 +2384,13 @@ async def on_interaction(interaction: discord.Interaction):
     elif custom_id == "delserver_no":
         await patch_msg(interaction, [container(txt("## Delete Cancelled"), sep(), txt("No Emojis Were Deleted From The Server."))])
 
-    # ── Fetchpet Save ─────────────────────────────────────────────────────────
+    # ── Fetchpet Save / Discard ───────────────────────────────────────────────
 
     elif custom_id.startswith("fetchbrainrots_save:"):
         key  = custom_id[len("fetchbrainrots_save:"):]
         info = getattr(bot, "_fetchbrainrots_pending", {}).pop(key, None)
         if not info:
-            await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run `/fetchpet` Again."))]); return
+            await patch_msg(interaction, [container(txt("## Session Expired"), sep(), txt("Please Run `/fetchbrainrots` Again."))]); return
         railway_url = info["railway_url"]; data = info["data"]; sha = info["sha"]; name = info["name"]
         try:
             data[name] = railway_url
@@ -2494,7 +2414,7 @@ async def on_interaction(interaction: discord.Interaction):
         name = info["name"] if info else "Pet"
         await patch_msg(interaction, [container(txt("## Discarded"), sep(), txt(f"**{title_case(name)}** Was Not Saved To GitHub."))])
 
-    # ── Auto Emoji Save ───────────────────────────────────────────────────────
+    # ── Auto Emoji Save / Discard ─────────────────────────────────────────────
 
     elif custom_id.startswith("autoemoji_save:"):
         key  = custom_id[len("autoemoji_save:"):]
