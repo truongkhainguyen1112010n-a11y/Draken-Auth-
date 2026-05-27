@@ -2021,7 +2021,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                 slots_used = 0
                 slots_free = max_slots
 
-    await followup(interaction, [container(
+    await patch_msg(interaction, [container(
         txt("## Auto Emoji Upload Starting..."), sep(),
         txt(f"**Step 1/4:** Scraping Wiki & Loading GitHub...\n**Mode:** `{mode}`    **Skip Existing:** `{skip_existing}`\n**Server Slots:** {slots_used}/{max_slots} Used    {slots_free} Free"),
     )])
@@ -2034,14 +2034,14 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         else:
             traits_data, mutations_data = await asyncio.gather(scrape_traits(), scrape_mutations())
     except Exception as e:
-        await followup(interaction, [container(txt("## Wiki Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
+        await patch_msg(interaction, [container(txt("## Wiki Scrape Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
     try:
         t_em, _         = await gh_fetch(GITHUB_TRAITS_FILE)
         m_em, emoji_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
         existing_emojis = {**t_em, **m_em}
     except Exception as e:
-        await followup(interaction, [container(txt("## GitHub Load Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
+        await patch_msg(interaction, [container(txt("## GitHub Load Failed"), sep(), txt(f"**Error:**\n```\n{e}\n```"))]); return
 
     candidates: list[tuple[str, str | None]] = []
     seen: set[str] = set()
@@ -2060,7 +2060,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         skipped_by_limit = [n for n, _ in to_upload[slots_free:]]
         to_upload        = to_upload[:slots_free]
 
-    await followup(interaction, [container(txt("## Auto Emoji  Plan"), sep(), txt(
+    await patch_msg(interaction, [container(txt("## Auto Emoji  Plan"), sep(), txt(
         f"**Traits Scraped:** {len(traits_data)}     **Mutations Scraped:** {len(mutations_data)}\n"
         f"**To Upload:** {len(to_upload)}     **No Image (Skip):** {len(no_image)}\n"
         f"**Already Mapped (Skipped):** {len(seen)-len(candidates) if skip_existing else 0}\n"
@@ -2072,14 +2072,14 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         msg = "All Items Either Have No Image, Or Are Already Mapped."
         if skipped_by_limit:
             msg += f"\n\n**Server Is Full ({slots_used}/{max_slots})!**\nUse `/deleteserveremojis` To Free Up Slots First."
-        await followup(interaction, [container(txt("## Nothing To Upload"), sep(), txt(f"{msg}\n\nRun `/getemojis` To See Current Status."))]); return
+        await patch_msg(interaction, [container(txt("## Nothing To Upload"), sep(), txt(f"{msg}\n\nRun `/getemojis` To See Current Status."))]); return
 
     uploaded_ok:   list[tuple[str, str]] = []
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
 
-    # Send the initial progress message once — capture its ID to patch in-place later
-    _progress_msg_id = await followup(interaction, [container(
+    # Show initial progress on @original — will be patched in-place each batch
+    await patch_msg(interaction, [container(
         txt(f"**Uploading {len(to_upload)} Emoji(s)...** {progress_bar(0, len(to_upload))}"),
         sep(),
         txt(f"*Batch 1/{(len(to_upload)+2)//3} — Done: 0  Failed: 0*"),
@@ -2118,23 +2118,19 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                     else:
                         failed_upload.append(f"{res[1]}: {err_detail}")
 
-            # Update progress bar in-place after processing each batch
+            # Patch @original with updated progress bar
             done_so_far = i + len(batch)
             bar = progress_bar(done_so_far, len(to_upload))
-            _progress_components = [container(
+            await patch_msg(interaction, [container(
                 txt(f"**Uploading {len(to_upload)} Emoji(s)...** {bar}"),
                 sep(),
                 txt(f"*Batch {i//3+1}/{(len(to_upload)+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
-            )]
-            if _progress_msg_id:
-                await patch_followup_msg(interaction, _progress_msg_id, _progress_components)
-            else:
-                await patch_msg(interaction, _progress_components)
+            )])
 
             if slot_full:
                 remaining = [n for n, _ in to_upload[i+3:]]
                 skipped_by_limit.extend(remaining)
-                await followup(interaction, [container(
+                await patch_msg(interaction, [container(
                     txt("## Server Emoji Slots Are Full"), sep(),
                     txt(
                         f"**Server Reached Limit ({max_slots} Slots — Tier {tier}).**\n\n"
