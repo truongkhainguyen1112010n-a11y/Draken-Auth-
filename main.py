@@ -1992,19 +1992,7 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
 
     async with aiohttp.ClientSession() as s:
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers={"Authorization": f"Bot {bot_token}"}) as rg:
-            if rg.status != 200:
-                err = await rg.text()
-                await followup(interaction, [container(
-                    txt("## Error — Cannot Access Guild"),
-                    sep(),
-                    txt(
-                        f"**HTTP {rg.status}** — Bot Cannot Access This Server Via API.\n\n"
-                        f"**Fix:** Make Sure `BOT_TOKEN` Environment Variable Is Set Correctly.\n"
-                        f"**Detail:** `{err[:150]}`"
-                    ),
-                )])
-                return
-            tier      = (await rg.json()).get("premium_tier", 0)
+            tier      = (await rg.json()).get("premium_tier", 0) if rg.status == 200 else 0
         max_slots = max_emoji_slots(tier)
         async with s.get(f"https://discord.com/api/v10/guilds/{guild_id}/emojis", headers={"Authorization": f"Bot {bot_token}"}) as r:
             if r.status == 200:
