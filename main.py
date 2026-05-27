@@ -144,10 +144,16 @@ async def followup(interaction: discord.Interaction, components: list[dict], eph
 
 async def patch_msg(interaction: discord.Interaction, components: list[dict], eph: bool = True):
     url   = f"{webhook_url(interaction)}/messages/@original"
-    flags = FLAGS_V2_EPH if eph else FLAGS_V2
     async with aiohttp.ClientSession() as s:
-        async with s.patch(url, json={"flags": flags, "components": components}) as r:
-            await r.read()
+        async with s.patch(url, json={"flags": FLAGS_V2, "components": components}) as r:
+            if r.status == 429:
+                body = await r.text()
+                try:    retry_after = json.loads(body).get("retry_after", 1.5)
+                except: retry_after = 1.5
+                await asyncio.sleep(float(retry_after) + 0.2)
+                async with aiohttp.ClientSession() as s2:
+                    async with s2.patch(url, json={"flags": FLAGS_V2, "components": components}) as r2:
+                        await r2.read()
 
 async def patch_followup_msg(interaction: discord.Interaction, message_id: str, components: list[dict], eph: bool = True):
     """Patch a specific followup message by ID (not @original)."""
@@ -2078,9 +2084,17 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
 
+    total_batches = (len(to_upload) + 2) // 3
+
+    def _bar(done):
+        pct    = done / len(to_upload) if to_upload else 1
+        filled = int(pct * 20)
+        return f"`[{'█'*filled}{'░'*(20-filled)}]` **{int(pct*100)}%** ({done}/{len(to_upload)})"
+
     await patch_msg(interaction, [container(
-        txt(f"## Uploading {len(to_upload)} Emoji(s)..."), sep(),
-        txt(f"**Please Wait** — Downloading, resizing & uploading to `{interaction.guild.name}`...\nThis may take a while. Do not run the command again."),
+        txt(f"## Uploading {len(to_upload)} Emoji(s)..."),
+        sep(),
+        txt(f"{_bar(0)}\nBatch 1/{total_batches} — Done: 0  Failed: 0"),
     )])
 
     connector = aiohttp.TCPConnector(force_close=True)
@@ -2116,14 +2130,20 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                     else:
                         failed_upload.append(f"{res[1]}: {err_detail}")
 
+            done_n    = i + len(batch)
+            batch_num = i // 3 + 1
+            await patch_msg(interaction, [container(
+                txt(f"## Uploading {len(to_upload)} Emoji(s)..."),
+                sep(),
+                txt(f"{_bar(done_n)}\nBatch {batch_num}/{total_batches} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}"),
+            )])
+
             if slot_full:
                 remaining = [n for n, _ in to_upload[i+3:]]
                 skipped_by_limit.extend(remaining)
                 break
             await asyncio.sleep(3.0)
 
-    ok_preview   = "\n".join(f"{es}  `{n}`" for n, es in uploaded_ok[:30])
-    if len(uploaded_ok) > 30: ok_preview += f"\n*...And {len(uploaded_ok)-30} More*"
     all_not_done = failed_dl + list(failed_upload)
     fail_txt     = ("\n\n**Failed:**\n" + "\n".join(f"• {e}" for e in all_not_done[:10])) if all_not_done else ""
     no_img_txt   = (f"\n\n**No Image ({len(no_image)}):** " + ", ".join(f"`{n}`" for n, _ in no_image[:15])) if no_image else ""
@@ -2133,39 +2153,41 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
         skipped_txt += "\n".join(f"• `{n}`" for n in skipped_by_limit[:20])
         if len(skipped_by_limit) > 20: skipped_txt += f"\n*...And {len(skipped_by_limit)-20} More*"
 
-    akey   = str(interaction.id)
-    wh_url = webhook_url(interaction)
-    payload = {
-        "flags": FLAGS_V2,
-        "components": [container(
-            txt("## Auto Emoji Upload Complete"),
-            sep(),
-            txt(
-                f"**Uploaded:** {len(uploaded_ok)}  •  **Failed:** {len(all_not_done)}"
-                f"{fail_txt}{no_img_txt}{skipped_txt}"
-                + (f"\n\n**Preview:**\n{ok_preview}" if ok_preview else "")
-            ),
-            sep(),
-            txt("**Save These Emojis To GitHub?**"),
-            sep(),
-            txt("`traits.lua` + `mutations.lua` Will Be Updated."),
-            sep(),
-            action_row(
-                btn("Save To GitHub", f"autoemoji_save:{akey}", style=2),
-                btn("Discard",        f"autoemoji_discard:{akey}", style=2),
-            ),
-        )],
-    }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(wh_url, json=payload) as r:
-            await r.read()
+    # Auto-save to GitHub
+    await patch_msg(interaction, [container(
+        txt("## Saving To GitHub..."), sep(),
+        txt(f"Upload done — **{len(uploaded_ok)}** emojis uploaded. Pushing IDs to GitHub..."),
+    )])
+    try:
+        trait_names_set    = {n for n, _ in traits_data}
+        mutation_names_set = {n for n, _ in mutations_data}
+        t_data, t_sha = await gh_fetch(GITHUB_TRAITS_FILE)
+        m_data, m_sha = await gh_fetch(GITHUB_MUTATIONS_FILE)
+        traits_added = 0; mutations_added = 0
+        for name, emoji_str in uploaded_ok:
+            if name in trait_names_set:
+                t_data[name] = emoji_str; traits_added += 1
+            elif name in mutation_names_set:
+                m_data[name] = emoji_str; mutations_added += 1
+        if traits_added:
+            await gh_push(GITHUB_TRAITS_FILE, t_data, t_sha, f"[DK] AutoEmojis: +{traits_added} Traits")
+        if mutations_added:
+            await gh_push(GITHUB_MUTATIONS_FILE, m_data, m_sha, f"[DK] AutoEmojis: +{mutations_added} Mutations")
+        github_txt = f"\n\n**GitHub:** Pushed — `{traits_added}` traits, `{mutations_added}` mutations saved."
+    except Exception as e:
+        github_txt = f"\n\n**GitHub Push Failed:** {str(e)[:150]}"
 
-    bot._autoemoji_pending = getattr(bot, "_autoemoji_pending", {})
-    bot._autoemoji_pending[akey] = {
-        "uploaded_ok":    uploaded_ok,
-        "traits_data":    traits_data,
-        "mutations_data": mutations_data,
-    }
+    ok_preview = "\n".join(f"{es}  `{n}`" for n, es in uploaded_ok[:30])
+    if len(uploaded_ok) > 30: ok_preview += f"\n*...And {len(uploaded_ok)-30} More*"
+
+    await patch_msg(interaction, [container(
+        txt("## Auto Emoji Upload Complete"), sep(),
+        txt(
+            f"**Uploaded:** {len(uploaded_ok)}  •  **Failed:** {len(all_not_done)}"
+            f"{fail_txt}{no_img_txt}{skipped_txt}{github_txt}"
+            + (f"\n\n**Preview:**\n{ok_preview}" if ok_preview else "")
+        ),
+    )])
 
 # ── /Deleteserveremojis ───────────────────────────────────────────────────────
 
