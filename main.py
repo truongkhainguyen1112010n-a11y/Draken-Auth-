@@ -100,17 +100,12 @@ def btn_no(custom_id: str) -> dict:
     return btn("No", custom_id, style=2)
 
 def progress_bar(done: int, total: int, width: int = 20) -> str:
-    pct    = done / total if total else 1
-    filled = int(pct * width)
-    empty  = width - filled
-    if filled == 0:
-        inner = "▱" * width
-    elif filled == width:
-        inner = "▰" * width
-    else:
-        inner = "▰" * filled + "▱" * empty
-    pct_str = f"{int(pct * 100)}%".rjust(4)
-    return f"`{inner}` {done}/{total} ({pct_str})"
+    pct     = done / total if total else 1
+    filled  = int(pct * width)
+    empty   = width - filled
+    bar     = "█" * filled + "░" * empty
+    pct_int = int(pct * 100)
+    return f"`[{bar}]` **{pct_int}%** ({done}/{total})"
 
 # ── Discord Helpers ───────────────────────────────────────────────────────────
 
