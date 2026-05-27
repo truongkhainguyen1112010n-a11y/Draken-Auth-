@@ -2078,11 +2078,9 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
 
-    # Show initial progress on @original — will be patched in-place each batch
     await patch_msg(interaction, [container(
-        txt(f"**Uploading {len(to_upload)} Emoji(s)...** {progress_bar(0, len(to_upload))}"),
-        sep(),
-        txt(f"*Batch 1/{(len(to_upload)+2)//3} — Done: 0  Failed: 0*"),
+        txt(f"## Uploading {len(to_upload)} Emoji(s)..."), sep(),
+        txt(f"**Please Wait** — Downloading, resizing & uploading to `{interaction.guild.name}`...\nThis may take a while. Do not run the command again."),
     )])
 
     connector = aiohttp.TCPConnector(force_close=True)
@@ -2118,29 +2116,9 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                     else:
                         failed_upload.append(f"{res[1]}: {err_detail}")
 
-            # Patch @original with updated progress bar
-            done_so_far = i + len(batch)
-            bar = progress_bar(done_so_far, len(to_upload))
-            await patch_msg(interaction, [container(
-                txt(f"**Uploading {len(to_upload)} Emoji(s)...** {bar}"),
-                sep(),
-                txt(f"*Batch {i//3+1}/{(len(to_upload)+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
-            )])
-
             if slot_full:
                 remaining = [n for n, _ in to_upload[i+3:]]
                 skipped_by_limit.extend(remaining)
-                await patch_msg(interaction, [container(
-                    txt("## Server Emoji Slots Are Full"), sep(),
-                    txt(
-                        f"**Server Reached Limit ({max_slots} Slots — Tier {tier}).**\n\n"
-                        f"**Uploaded:** {len(uploaded_ok)}\n"
-                        f"**Could Not Upload ({len(skipped_by_limit)}):**\n"
-                        + "\n".join(f"• `{n}`" for n in skipped_by_limit[:20])
-                        + (f"\n*...And {len(skipped_by_limit)-20} More*" if len(skipped_by_limit) > 20 else "")
-                        + "\n\nUse `/deleteserveremojis` To Free Up Slots."
-                    ),
-                )])
                 break
             await asyncio.sleep(3.0)
 
