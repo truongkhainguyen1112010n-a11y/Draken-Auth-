@@ -2060,16 +2060,17 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
 
+    # Send the initial progress message once, then patch it in-place each batch
+    await followup(interaction, [container(
+        txt(f"**Uploading {len(to_upload)} Emoji(s)...** {progress_bar(0, len(to_upload))}"),
+        sep(),
+        txt(f"*Batch 1/{(len(to_upload)+2)//3} — Done: 0  Failed: 0*"),
+    )])
+
     connector = aiohttp.TCPConnector(force_close=True)
     async with aiohttp.ClientSession(connector=connector) as session:
         for i in range(0, len(to_upload), 3):
             batch = to_upload[i:i+3]
-            bar   = progress_bar(i, len(to_upload))
-            await followup(interaction, [container(
-                txt(f"**Uploading {len(to_upload)} Emoji(s)...** {bar}"),
-                sep(),
-                txt(f"*Batch {i//3+1}/{(len(to_upload)+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
-            )])
 
             tasks = []
             for name, thumb in batch:
@@ -2098,6 +2099,15 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
                         skipped_by_limit.append(res[1])
                     else:
                         failed_upload.append(f"{res[1]}: {err_detail}")
+
+            # Update progress bar in-place after processing each batch
+            done_so_far = i + len(batch)
+            bar = progress_bar(done_so_far, len(to_upload))
+            await patch_msg(interaction, [container(
+                txt(f"**Uploading {len(to_upload)} Emoji(s)...** {bar}"),
+                sep(),
+                txt(f"*Batch {i//3+1}/{(len(to_upload)+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
+            )])
 
             if slot_full:
                 remaining = [n for n, _ in to_upload[i+3:]]
