@@ -125,14 +125,19 @@ async def send_v2(interaction: discord.Interaction, components: list[dict], eph:
             if r.status not in (200, 204):
                 raise Exception(f"Discord {r.status}: {(await r.text())[:200]}")
 
-async def followup(interaction: discord.Interaction, components: list[dict], eph: bool = True):
+async def followup(interaction: discord.Interaction, components: list[dict], eph: bool = True) -> str | None:
+    """Send a followup message. Returns the message ID if available."""
     url     = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}"
     payload = {"flags": FLAGS_V2_EPH if eph else FLAGS_V2, "components": components}
     for _ in range(5):
         async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload) as r:
                 if r.status in (200, 204):
-                    return
+                    try:
+                        data = await r.json()
+                        return str(data.get("id", ""))
+                    except Exception:
+                        return None
                 body = await r.text()
                 if r.status == 429:
                     try:    retry_after = json.loads(body).get("retry_after", 1.5)
@@ -148,6 +153,24 @@ async def patch_msg(interaction: discord.Interaction, components: list[dict], ep
     async with aiohttp.ClientSession() as s:
         async with s.patch(url, json={"flags": flags, "components": components}) as r:
             await r.read()
+
+async def patch_followup_msg(interaction: discord.Interaction, message_id: str, components: list[dict], eph: bool = True):
+    """Patch a specific followup message by ID (not @original)."""
+    url   = f"https://discord.com/api/v10/webhooks/{interaction.application_id}/{interaction.token}/messages/{message_id}"
+    flags = FLAGS_V2_EPH if eph else FLAGS_V2
+    for _ in range(5):
+        async with aiohttp.ClientSession() as s:
+            async with s.patch(url, json={"flags": flags, "components": components}) as r:
+                if r.status in (200, 204):
+                    return
+                body = await r.text()
+                if r.status == 429:
+                    try:    retry_after = json.loads(body).get("retry_after", 1.5)
+                    except: retry_after = 1.5
+                    await asyncio.sleep(float(retry_after) + 0.2)
+                    continue
+                raise Exception(f"Discord {r.status}: {body[:200]}")
+    raise Exception("Rate Limited  Max Retries Exceeded")
 
 # ── URL Helpers ───────────────────────────────────────────────────────────────
 
@@ -2060,8 +2083,8 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
     failed_upload: list[str]             = []
     failed_dl:     list[str]             = []
 
-    # Send the initial progress message once, then patch it in-place each batch
-    await followup(interaction, [container(
+    # Send the initial progress message once — capture its ID to patch in-place later
+    _progress_msg_id = await followup(interaction, [container(
         txt(f"**Uploading {len(to_upload)} Emoji(s)...** {progress_bar(0, len(to_upload))}"),
         sep(),
         txt(f"*Batch 1/{(len(to_upload)+2)//3} — Done: 0  Failed: 0*"),
@@ -2103,11 +2126,15 @@ async def autoemojis(interaction: discord.Interaction, mode: str = "both", skip_
             # Update progress bar in-place after processing each batch
             done_so_far = i + len(batch)
             bar = progress_bar(done_so_far, len(to_upload))
-            await patch_msg(interaction, [container(
+            _progress_components = [container(
                 txt(f"**Uploading {len(to_upload)} Emoji(s)...** {bar}"),
                 sep(),
                 txt(f"*Batch {i//3+1}/{(len(to_upload)+2)//3} — Done: {len(uploaded_ok)}  Failed: {len(failed_upload)+len(failed_dl)}*"),
-            )])
+            )]
+            if _progress_msg_id:
+                await patch_followup_msg(interaction, _progress_msg_id, _progress_components)
+            else:
+                await patch_msg(interaction, _progress_components)
 
             if slot_full:
                 remaining = [n for n, _ in to_upload[i+3:]]
