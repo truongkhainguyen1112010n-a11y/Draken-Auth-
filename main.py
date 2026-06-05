@@ -2,11 +2,35 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                     Discord Multi-System Bot                                ║
 ║                     Components V2  |  Single File Edition                   ║
-║                     discord.py 2.4+  |  aiohttp                             ║
+║                     discord.py 2.4+  |  aiohttp  |  aiosqlite              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
-║  Install  :  pip install discord.py aiohttp                                 ║
+║  Install  :  pip install discord.py aiohttp aiosqlite                       ║
 ║  Run      :  python bot.py                                                   ║
-║  Commands :  /ticket  /welcome  /leave  /payment  /ping  /invites           ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  /ticket setup    — Configure ticket system                                 ║
+║  /ticket panel    — Send ticket panel                                       ║
+║  /ticket add      — Add user to ticket                                      ║
+║  /ticket remove   — Remove user from ticket                                 ║
+║  /ticket list     — List open tickets                                       ║
+║  /ticket delete   — Force delete ticket                                     ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  /invites setup   — Configure invite tracking channel                       ║
+║  /invites check   — Check how many members a user has invited               ║
+║  /invites top     — Show invite leaderboard                                 ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  /welcome setup   — Configure welcome message system                        ║
+║  /leave   setup   — Configure leave message system                          ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  /payment setup        — Configure VietQR + Casso                           ║
+║  /payment create       — Generate a QR payment request                      ║
+║  /payment check        — Check payment status by ref                        ║
+║  /payment confirm      — Manually confirm a payment                         ║
+║  /payment cancel       — Cancel a pending payment                           ║
+║  /payment list         — List all payments with filter                      ║
+║  /payment announce_all — Send daily summary to channel                      ║
+║  /payment info         — Show current payment config                        ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  /ping             — Check bot latency                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -25,6 +49,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import aiohttp
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -265,19 +290,12 @@ async def _v2_edit_msg(channel_id: int, message_id: int, components: list[dict])
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                       PERSISTENT STORE  (data.json)                         ║
+# ║                      PERSISTENT STORE  (SQLite via aiosqlite)               ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-DATA_FILE = pathlib.Path("data.json")
+DB_PATH = pathlib.Path("bot.db")
 
-_CONFIG_KEYS = {
-    "ticket_category", "log_channel", "support_role", "panel_channel",
-    "counter", "welcome_channel", "welcome_purchase", "welcome_rules",
-    "welcome_news", "pay_bank_id", "pay_account_no", "pay_account_name",
-    "pay_casso_key", "pay_log_channel", "pay_confirm_role", "pay_timeout",
-    "pay_announce_channel", "leave_channel", "invites_channel",
-}
-
+# In-memory config + runtime data (tickets, payments) — still kept per-guild
 _STORE: dict[int, dict] = {}
 
 _DEFAULTS: dict = {
@@ -301,51 +319,216 @@ _DEFAULTS: dict = {
     "pay_confirm_role": None,
     "pay_timeout":      600,
     "payments":         {},
+    "pay_announce_channel": None,
 }
 
+_CONFIG_KEYS = {
+    "ticket_category", "log_channel", "support_role", "panel_channel",
+    "counter", "welcome_channel", "welcome_purchase", "welcome_rules",
+    "welcome_news", "pay_bank_id", "pay_account_no", "pay_account_name",
+    "pay_casso_key", "pay_log_channel", "pay_confirm_role", "pay_timeout",
+    "pay_announce_channel", "leave_channel", "invites_channel",
+}
 
-def _load_data() -> None:
+# ── Database init ──────────────────────────────────────────────────────────────
+
+async def _db_init() -> None:
+    """Create all tables if they don't exist yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executescript("""
+            -- Guild config (one row per guild)
+            CREATE TABLE IF NOT EXISTS guild_config (
+                guild_id    INTEGER PRIMARY KEY,
+                data_json   TEXT    NOT NULL DEFAULT '{}'
+            );
+
+            -- Ticket log (closed tickets kept for history)
+            CREATE TABLE IF NOT EXISTS ticket_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id    INTEGER NOT NULL,
+                ticket_id   TEXT    NOT NULL,
+                author_id   INTEGER NOT NULL,
+                author_name TEXT    NOT NULL,
+                category    TEXT,
+                subject     TEXT,
+                description TEXT,
+                opened_at   TEXT,
+                closed_by   INTEGER,
+                closed_at   TEXT
+            );
+
+            -- Payment records
+            CREATE TABLE IF NOT EXISTS payments (
+                ref             TEXT    NOT NULL,
+                guild_id        INTEGER NOT NULL,
+                user_id         INTEGER NOT NULL,
+                amount          INTEGER NOT NULL,
+                description     TEXT,
+                channel_id      INTEGER,
+                message_id      INTEGER,
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                created_at      REAL    NOT NULL,
+                confirmed_at    REAL,
+                confirmed_by_tx TEXT,
+                PRIMARY KEY (ref, guild_id)
+            );
+
+            -- Invite tracking (cumulative per inviter per guild)
+            CREATE TABLE IF NOT EXISTS invite_stats (
+                guild_id    INTEGER NOT NULL,
+                inviter_id  INTEGER NOT NULL,
+                total_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, inviter_id)
+            );
+        """)
+        await db.commit()
+    log.info("Database Initialised At %s", DB_PATH)
+
+
+# ── Load / Save guild config ───────────────────────────────────────────────────
+
+async def _db_load_all() -> None:
+    """Load all guild configs from SQLite into _STORE."""
     global _STORE
-    if not DATA_FILE.exists():
-        log.info("No data.json Found — Starting Fresh.")
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT guild_id, data_json FROM guild_config") as cur:
+            rows = await cur.fetchall()
+    for guild_id, data_json in rows:
+        try:
+            saved = json.loads(data_json)
+        except Exception:
+            saved = {}
+        d = dict(_DEFAULTS)
+        for k in _CONFIG_KEYS:
+            if k in saved:
+                d[k] = saved[k]
+        # Restore runtime dicts
+        d["tickets"]  = saved.get("tickets",  {})
+        d["payments"] = {}  # payments loaded lazily from DB
+        _STORE[int(guild_id)] = d
+    log.info("Loaded SQLite — %d Guild(s) Restored.", len(_STORE))
+
+
+async def _db_save_guild(guild_id: int) -> None:
+    """Persist one guild's config to SQLite (async-safe)."""
+    d = _STORE.get(guild_id)
+    if d is None:
         return
-    try:
-        raw = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-        for gid_str, saved in raw.items():
-            gid = int(gid_str)
-            d   = dict(_DEFAULTS)
-            for k in _CONFIG_KEYS:
-                if k in saved:
-                    d[k] = saved[k]
-            _STORE[gid] = d
-        log.info("Loaded data.json — %d Guild(s) Restored.", len(_STORE))
-    except Exception as e:
-        log.error("Failed To Load data.json: %s", e)
+    blob = {k: d[k] for k in _CONFIG_KEYS if k in d}
+    blob["tickets"] = d.get("tickets", {})
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO guild_config(guild_id, data_json) VALUES(?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET data_json=excluded.data_json",
+            (guild_id, json.dumps(blob, ensure_ascii=False)),
+        )
+        await db.commit()
 
 
 def _save_data() -> None:
-    try:
-        out: dict = {}
-        for gid, d in _STORE.items():
-            out[str(gid)] = {k: d[k] for k in _CONFIG_KEYS if k in d}
-        DATA_FILE.write_text(
-            json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        log.error("Failed To Save data.json: %s", e)
+    """Synchronous shim — schedules async save for each guild."""
+    for gid in list(_STORE):
+        asyncio.get_event_loop().create_task(_db_save_guild(gid))
 
 
 def _gdata(guild_id: int) -> dict:
     if guild_id not in _STORE:
         _STORE[guild_id] = dict(_DEFAULTS)
+        _STORE[guild_id]["tickets"]  = {}
+        _STORE[guild_id]["payments"] = {}
     return _STORE[guild_id]
 
 
 def _next_id(guild_id: int) -> str:
     d = _gdata(guild_id)
     d["counter"] += 1
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(guild_id))
     return f"{d['counter']:04d}"
+
+
+# ── Invite stats helpers ───────────────────────────────────────────────────────
+
+async def _invite_add(guild_id: int, inviter_id: int) -> int:
+    """Increment invite count for inviter and return new total."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO invite_stats(guild_id, inviter_id, total_count) VALUES(?,?,1) "
+            "ON CONFLICT(guild_id, inviter_id) DO UPDATE SET total_count = total_count + 1",
+            (guild_id, inviter_id),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT total_count FROM invite_stats WHERE guild_id=? AND inviter_id=?",
+            (guild_id, inviter_id),
+        ) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else 1
+
+
+async def _invite_get(guild_id: int, inviter_id: int) -> int:
+    """Return cumulative invite count for a user."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT total_count FROM invite_stats WHERE guild_id=? AND inviter_id=?",
+            (guild_id, inviter_id),
+        ) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+async def _invite_leaderboard(guild_id: int, limit: int = 10) -> list[tuple[int, int]]:
+    """Return top inviters as list of (inviter_id, total_count)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT inviter_id, total_count FROM invite_stats "
+            "WHERE guild_id=? ORDER BY total_count DESC LIMIT ?",
+            (guild_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+# ── Payment DB helpers ─────────────────────────────────────────────────────────
+
+async def _db_save_payment(guild_id: int, ref: str, p: dict) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO payments(ref,guild_id,user_id,amount,description,channel_id,"
+            "message_id,status,created_at,confirmed_at,confirmed_by_tx) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(ref,guild_id) DO UPDATE SET "
+            "status=excluded.status, confirmed_at=excluded.confirmed_at, "
+            "confirmed_by_tx=excluded.confirmed_by_tx",
+            (
+                ref, guild_id, p["user_id"], p["amount"], p.get("description",""),
+                p["channel_id"], p["message_id"], p["status"],
+                p["created_at"], p.get("confirmed_at"), p.get("confirmed_by_tx"),
+            ),
+        )
+        await db.commit()
+
+
+async def _db_log_ticket_close(guild_id: int, td: dict, closed_by_id: int) -> None:
+    """Insert a closed-ticket record into ticket_log."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO ticket_log(guild_id,ticket_id,author_id,author_name,"
+            "category,subject,description,opened_at,closed_by,closed_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                guild_id,
+                td.get("id", "0000"),
+                td.get("author_id", 0),
+                td.get("author_name", ""),
+                td.get("category", ""),
+                td.get("subject", ""),
+                td.get("description", ""),
+                td.get("created_at", ""),
+                closed_by_id,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        await db.commit()
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -453,6 +636,7 @@ def _payment_create(
         "confirmed_by_tx": None,
     }
     d["payments"][ref] = payment
+    asyncio.get_event_loop().create_task(_db_save_payment(guild_id, ref, payment))
     return payment
 
 def _payment_get(guild_id: int, ref: str) -> dict | None:
@@ -465,6 +649,7 @@ def _payment_confirm(guild_id: int, ref: str, tx_id: str) -> bool:
     p["status"]          = "confirmed"
     p["confirmed_at"]    = time.time()
     p["confirmed_by_tx"] = tx_id
+    asyncio.get_event_loop().create_task(_db_save_payment(guild_id, ref, p))
     return True
 
 def _payment_expire(guild_id: int, ref: str) -> bool:
@@ -472,6 +657,7 @@ def _payment_expire(guild_id: int, ref: str) -> bool:
     if not p or p["status"] != "pending":
         return False
     p["status"] = "expired"
+    asyncio.get_event_loop().create_task(_db_save_payment(guild_id, ref, p))
     return True
 
 
@@ -601,7 +787,8 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    _load_data()
+    await _db_init()
+    await _db_load_all()
     bot.add_view(PanelView())
     bot.add_view(ControlView())
     await bot.tree.sync()
@@ -939,16 +1126,14 @@ async def on_member_join(member: discord.Member):
     old_cache = _invite_cache.get(guild.id, {})
     inviter: discord.Member | None = None
     used_code: str = "Unknown"
-    used_uses: int = 0
 
     try:
         new_invites = await guild.invites()
         for inv in new_invites:
             old_uses = old_cache.get(inv.code, 0)
             if (inv.uses or 0) > old_uses:
-                inviter    = guild.get_member(inv.inviter.id) if inv.inviter else None
-                used_code  = inv.code
-                used_uses  = inv.uses or 0
+                inviter   = guild.get_member(inv.inviter.id) if inv.inviter else None
+                used_code = inv.code
                 break
         # Refresh cache after detection
         _invite_cache[guild.id] = {inv.code: (inv.uses or 0) for inv in new_invites}
@@ -957,8 +1142,14 @@ async def on_member_join(member: discord.Member):
         await _refresh_invite_cache(guild)
         return
 
-    inviter_text = inviter.mention if inviter else "`Unknown`"
-    inviter_name = str(inviter) if inviter else "Unknown"
+    # Update cumulative count in DB
+    if inviter:
+        total_invited = await _invite_add(guild.id, inviter.id)
+    else:
+        total_invited = 0
+
+    inviter_text   = inviter.mention if inviter else "`Unknown`"
+    inviter_name   = str(inviter) if inviter else "Unknown"
     inviter_avatar = (
         inviter.display_avatar.with_size(256).url if inviter
         else "https://cdn.discordapp.com/embed/avatars/0.png"
@@ -971,14 +1162,14 @@ async def on_member_join(member: discord.Member):
             _section(
                 f"**{member.mention}** Was Invited By {inviter_text}\n"
                 f"> Invite Code: `{used_code}`\n"
-                f"> Total Uses: `{used_uses}`",
-                avatar_url,
+                f"> {inviter_text} Has Now Invited **{total_invited}** Member(s) Total",
+                inviter_avatar,
             ),
             _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ])
-    log.info("Invite Track: %s Joined Via %s (Invited By %s)", member, used_code, inviter_name)
+    log.info("Invite Track: %s Joined Via %s (Invited By %s — Total: %d)", member, used_code, inviter_name, total_invited)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -1112,37 +1303,74 @@ async def _do_close_ticket(interaction: discord.Interaction):
         )
     ])
 
+    # ── Build transcript ───────────────────────────────────────────────────────
     author = guild.get_member(td["author_id"])
     try:
         buf, fname = await _build_transcript(channel, td, str(interaction.user))
+
+        # DM the ticket author
         dm_body = (
             f"**Ticket #{td.get('id', '????')} — {td.get('category', '')}**\n"
             f"Your Ticket In **{guild.name}** Has Been Closed.\n"
             f"A Transcript Of The Conversation Is Attached Below."
         )
         if author:
-            await author.send(content=dm_body, file=discord.File(buf, filename=fname))
+            try:
+                await author.send(content=dm_body, file=discord.File(buf, filename=fname))
+            except discord.Forbidden:
+                log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
+
+        # ── Send transcript to log channel with a clean embed ────────────────
         log_ch_id = d.get("log_channel")
         if log_ch_id:
             lch = guild.get_channel(log_ch_id)
             if lch:
                 buf.seek(0)
+                ticket_num = td.get('id', '????')
+                category   = td.get('category', 'N/A')
+                subject    = td.get('subject', 'N/A')
+                author_mention = author.mention if author else f"<@{td['author_id']}>"
+                claimed_by_id  = td.get("claimed_by")
+                claimed_txt    = f"<@{claimed_by_id}>" if claimed_by_id else "`Unclaimed`"
+                opened_at      = td.get("created_at", "")
+
+                await _v2_send(lch, [  # type: ignore
+                    _container(
+                        _text(f"## 🎫 Ticket #{ticket_num} Closed"),
+                        _separator(),
+                        _section(
+                            f"**Category:** {category}\n"
+                            f"**Subject:** {subject}\n"
+                            f"**Opened By:** {author_mention}\n"
+                            f"**Claimed By:** {claimed_txt}\n"
+                            f"**Closed By:** {interaction.user.mention}",
+                            interaction.user.display_avatar.with_size(256).url,
+                        ),
+                        _separator(),
+                        _text(
+                            f"📄 Transcript: `{fname}`\n"
+                            f"-# Closed <t:{ts}:F>"
+                        ),
+                    )
+                ])
+                # Send the actual .txt file separately (V2 containers don't support file attachments)
+                buf.seek(0)
                 await lch.send(
-                    content=(
-                        f"Transcript — Ticket `#{td.get('id', '????')}` "
-                        f"Closed By {interaction.user.mention}"
-                    ),
+                    content=f"📄 `transcript-{ticket_num}.txt`",
                     file=discord.File(buf, filename=fname),
                 )
-    except discord.Forbidden:
-        log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
+
     except Exception as e:
-        log.error("Transcript DM Error: %s", e)
+        log.error("Transcript Error: %s", e)
+
+    # ── Log to DB ──────────────────────────────────────────────────────────────
+    await _db_log_ticket_close(guild.id, td, interaction.user.id)
 
     await asyncio.sleep(10)
     subject = td.get("subject", "")
     await channel.delete(reason=f"Ticket Closed By {interaction.user}")
     d["tickets"].pop(interaction.channel_id, None)
+    asyncio.get_event_loop().create_task(_db_save_guild(guild.id))
     await _log_event(guild, "CLOSE", interaction.channel_id, interaction.user, subject)
 
 
@@ -1272,7 +1500,7 @@ async def ticket_setup(
     d["ticket_category"] = category.id
     d["support_role"]    = support_role.id
     d["log_channel"]     = log_channel.id if log_channel else None
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
 
     lc = log_channel.mention if log_channel else t("setup_not_set")
     await _v2_respond(interaction, [
@@ -1483,7 +1711,7 @@ async def welcome_setup(
     d["welcome_purchase"] = purchase.id if purchase else None
     d["welcome_rules"]    = rules.id    if rules    else None
     d["welcome_news"]     = news.id     if news     else None
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
 
     def _ref(ch: Optional[discord.TextChannel]) -> str:
         return ch.mention if ch else "`Not Set`"
@@ -1559,7 +1787,7 @@ async def payment_setup(
     d["pay_log_channel"]  = log_channel.id
     d["pay_confirm_role"] = confirm_role.id if confirm_role else None
     d["pay_timeout"]      = max(1, timeout) * 60
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
 
     await _v2_respond(interaction, [
         _container(
@@ -1813,7 +2041,7 @@ async def payment_announce_all(
     await interaction.response.defer(ephemeral=True, thinking=True)
     d = _gdata(interaction.guild_id)
     d["pay_announce_channel"] = channel.id
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
 
     await _send_daily_summary(
         interaction.guild_id, channel.id, note=note, actor=str(interaction.user)
@@ -2041,7 +2269,7 @@ async def leave_setup(
 ):
     d = _gdata(interaction.guild_id)
     d["leave_channel"] = channel.id
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
 
     await _v2_respond(interaction, [
         _container(
@@ -2060,7 +2288,11 @@ bot.tree.add_command(leave_grp)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                       /invites setup COMMAND                                ║
+# ║                       /invites COMMANDS                                     ║
+# ╠══════════════════════════════════════════════════════════════════════════════╣
+# ║  /invites setup   — Configure invite tracking channel                       ║
+# ║  /invites check   — Check how many people a user has invited                ║
+# ║  /invites top     — Show invite leaderboard                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 invites_grp = app_commands.Group(
@@ -2079,7 +2311,7 @@ async def invites_setup(
 ):
     d = _gdata(interaction.guild_id)
     d["invites_channel"] = channel.id
-    _save_data()
+    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
 
     # Pre-cache current invites
     await _refresh_invite_cache(interaction.guild)
@@ -2090,11 +2322,70 @@ async def invites_setup(
             _separator(),
             _text(
                 f"**Invites Channel:** {channel.mention}\n\n"
-                "When A Member Joins, The Bot Will Automatically Detect Who Invited Them."
+                "When A Member Joins, The Bot Will Detect Who Invited Them\n"
+                "And Track Their Cumulative Invite Count In The Database."
             ),
         )
     ])
     log.info("Invites Setup By %s In '%s'", interaction.user, interaction.guild.name)
+
+
+@invites_grp.command(name="check", description="Check How Many People A User Has Invited")
+@app_commands.describe(user="Member To Check (Defaults To Yourself)")
+async def invites_check(
+    interaction: discord.Interaction,
+    user:        Optional[discord.Member] = None,
+):
+    target = user or interaction.user
+    count  = await _invite_get(interaction.guild_id, target.id)
+    ts     = int(datetime.now(timezone.utc).timestamp())
+
+    await _v2_respond(interaction, [
+        _container(
+            _text("## 📨 Invite Stats"),
+            _separator(),
+            _section(
+                f"**{target.mention}** Has Invited **{count}** Member(s)\n"
+                f"-# Tracked Since Bot Joined / Invite Tracking Was Enabled",
+                target.display_avatar.with_size(256).url,
+            ),
+            _separator(),
+            _text(f"-# <t:{ts}:F>"),
+        )
+    ], ephemeral=False)
+
+
+@invites_grp.command(name="top", description="Show The Invite Leaderboard")
+async def invites_top(interaction: discord.Interaction):
+    board = await _invite_leaderboard(interaction.guild_id, limit=10)
+    ts    = int(datetime.now(timezone.utc).timestamp())
+
+    if not board:
+        return await _v2_respond(interaction, [
+            _container(
+                _text("## 📨 Invite Leaderboard"),
+                _separator(),
+                _text("No Invite Data Found Yet. Data Is Collected When Members Join."),
+            )
+        ])
+
+    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+    rows   = []
+    for i, (uid, cnt) in enumerate(board):
+        m      = interaction.guild.get_member(uid)
+        name   = m.display_name if m else f"<@{uid}>"
+        mention= m.mention       if m else f"<@{uid}>"
+        rows.append(f"{medals[i]} **#{i+1}** {mention} — **{cnt}** Invite(s)")
+
+    await _v2_respond(interaction, [
+        _container(
+            _text("## 📨 Invite Leaderboard"),
+            _separator(),
+            _text("\n".join(rows)),
+            _separator(),
+            _text(f"-# <t:{ts}:F>"),
+        )
+    ], ephemeral=False)
 
 
 bot.tree.add_command(invites_grp)
