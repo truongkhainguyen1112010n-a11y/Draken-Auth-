@@ -426,9 +426,8 @@ async def _db_save_guild(guild_id: int) -> None:
 
 
 def _save_data() -> None:
-    """Synchronous shim — schedules async save for each guild."""
-    for gid in list(_STORE):
-        asyncio.get_event_loop().create_task(_db_save_guild(gid))
+    """No-op shim — all saves are done via await _db_save_guild() directly."""
+    pass
 
 
 def _gdata(guild_id: int) -> dict:
@@ -439,10 +438,10 @@ def _gdata(guild_id: int) -> dict:
     return _STORE[guild_id]
 
 
-def _next_id(guild_id: int) -> str:
+async def _next_id(guild_id: int) -> str:
     d = _gdata(guild_id)
     d["counter"] += 1
-    asyncio.get_event_loop().create_task(_db_save_guild(guild_id))
+    await _db_save_guild(guild_id)
     return f"{d['counter']:04d}"
 
 
@@ -608,7 +607,7 @@ async def _casso_get_transactions(api_key: str, from_id: int = 0) -> list[dict]:
 # ║                         PAYMENT STORE HELPERS                               ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-def _payment_create(
+async def _payment_create(
     guild_id: int,
     user_id: int,
     amount: int,
@@ -636,28 +635,28 @@ def _payment_create(
         "confirmed_by_tx": None,
     }
     d["payments"][ref] = payment
-    asyncio.get_event_loop().create_task(_db_save_payment(guild_id, ref, payment))
+    await _db_save_payment(guild_id, ref, payment)
     return payment
 
 def _payment_get(guild_id: int, ref: str) -> dict | None:
     return _gdata(guild_id)["payments"].get(ref)
 
-def _payment_confirm(guild_id: int, ref: str, tx_id: str) -> bool:
+async def _payment_confirm(guild_id: int, ref: str, tx_id: str) -> bool:
     p = _payment_get(guild_id, ref)
     if not p or p["status"] != "pending":
         return False
     p["status"]          = "confirmed"
     p["confirmed_at"]    = time.time()
     p["confirmed_by_tx"] = tx_id
-    asyncio.get_event_loop().create_task(_db_save_payment(guild_id, ref, p))
+    await _db_save_payment(guild_id, ref, p)
     return True
 
-def _payment_expire(guild_id: int, ref: str) -> bool:
+async def _payment_expire(guild_id: int, ref: str) -> bool:
     p = _payment_get(guild_id, ref)
     if not p or p["status"] != "pending":
         return False
     p["status"] = "expired"
-    asyncio.get_event_loop().create_task(_db_save_payment(guild_id, ref, p))
+    await _db_save_payment(guild_id, ref, p)
     return True
 
 
@@ -909,7 +908,7 @@ async def payment_checker():
                 if p["status"] != "pending":
                     continue
                 if ref.upper() in desc and amount >= p["amount"]:
-                    if _payment_confirm(guild_id, ref, tx_id):
+                    if await _payment_confirm(guild_id, ref, tx_id):
                         await _notify_payment_confirmed(guild_id, ref)
                         pending.pop(ref, None)
                         break
@@ -932,7 +931,7 @@ async def payment_expiry():
             if p["status"] != "pending":
                 continue
             if now - p["created_at"] > timeout:
-                if _payment_expire(guild_id, ref):
+                if await _payment_expire(guild_id, ref):
                     await _notify_payment_expired(guild_id, ref)
 
 @payment_expiry.before_loop
@@ -1207,7 +1206,7 @@ async def _create_ticket(
 
     support_role = guild.get_role(d["support_role"]) if d["support_role"] else None
     cat_info     = TICKET_CATEGORIES[category_key]
-    ticket_id    = _next_id(guild.id)
+    ticket_id    = await _next_id(guild.id)
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -1375,7 +1374,7 @@ async def _do_close_ticket(interaction: discord.Interaction):
     subject = td.get("subject", "")
     await channel.delete(reason=f"Ticket Closed By {interaction.user}")
     d["tickets"].pop(interaction.channel_id, None)
-    asyncio.get_event_loop().create_task(_db_save_guild(guild.id))
+    await _db_save_guild(guild.id)
     await _log_event(guild, "CLOSE", interaction.channel_id, interaction.user, subject)
 
 
@@ -1505,7 +1504,7 @@ async def ticket_setup(
     d["ticket_category"] = category.id
     d["support_role"]    = support_role.id
     d["log_channel"]     = log_channel.id if log_channel else None
-    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
+    await _db_save_guild(interaction.guild_id)
 
     lc = log_channel.mention if log_channel else t("setup_not_set")
     await _v2_respond(interaction, [
@@ -1716,7 +1715,7 @@ async def welcome_setup(
     d["welcome_purchase"] = purchase.id if purchase else None
     d["welcome_rules"]    = rules.id    if rules    else None
     d["welcome_news"]     = news.id     if news     else None
-    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
+    await _db_save_guild(interaction.guild_id)
 
     def _ref(ch: Optional[discord.TextChannel]) -> str:
         return ch.mention if ch else "`Not Set`"
@@ -1792,7 +1791,7 @@ async def payment_setup(
     d["pay_log_channel"]  = log_channel.id
     d["pay_confirm_role"] = confirm_role.id if confirm_role else None
     d["pay_timeout"]      = max(1, timeout) * 60
-    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
+    await _db_save_guild(interaction.guild_id)
 
     await _v2_respond(interaction, [
         _container(
@@ -1882,7 +1881,7 @@ async def payment_create(
     ])
 
     msg_id = int(msg_data.get("id", 0))
-    _payment_create(interaction.guild_id, payer.id, amount, "", channel.id, msg_id, ref=ref)
+    await _payment_create(interaction.guild_id, payer.id, amount, "", channel.id, msg_id, ref=ref)
 
     try:
         await interaction.delete_original_response()
@@ -1955,7 +1954,7 @@ async def payment_confirm(interaction: discord.Interaction, ref: str):
             f"Payment `{matched_key}` Is Already **{p['status'].upper()}**.", ephemeral=True
         )
 
-    _payment_confirm(interaction.guild_id, matched_key, "MANUAL")
+    await _payment_confirm(interaction.guild_id, matched_key, "MANUAL")
     await _notify_payment_confirmed(interaction.guild_id, matched_key)
     await interaction.response.send_message(
         f"Payment `{matched_key}` Confirmed Manually. ✅", ephemeral=True
@@ -1976,7 +1975,7 @@ async def payment_cancel(interaction: discord.Interaction, ref: str):
         return await interaction.response.send_message(
             f"Payment Is Already **{p['status'].upper()}**.", ephemeral=True
         )
-    _payment_expire(interaction.guild_id, ref.upper())
+    await _payment_expire(interaction.guild_id, ref.upper())
     await _notify_payment_expired(interaction.guild_id, ref.upper())
     await interaction.response.send_message(f"Payment `{ref}` Cancelled.", ephemeral=True)
 
@@ -2046,7 +2045,7 @@ async def payment_announce_all(
     await interaction.response.defer(ephemeral=True, thinking=True)
     d = _gdata(interaction.guild_id)
     d["pay_announce_channel"] = channel.id
-    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
+    await _db_save_guild(interaction.guild_id)
 
     await _send_daily_summary(
         interaction.guild_id, channel.id, note=note, actor=str(interaction.user)
@@ -2133,7 +2132,7 @@ async def on_interaction(interaction: discord.Interaction):
             "Only The Payment Owner Can Cancel This.", ephemeral=True
         )
 
-    _payment_expire(guild_id, ref)
+    await _payment_expire(guild_id, ref)
     await interaction.response.defer()
 
     await _v2_edit_msg(p["channel_id"], p["message_id"], [
@@ -2274,7 +2273,7 @@ async def leave_setup(
 ):
     d = _gdata(interaction.guild_id)
     d["leave_channel"] = channel.id
-    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
+    await _db_save_guild(interaction.guild_id)
 
     await _v2_respond(interaction, [
         _container(
@@ -2316,7 +2315,7 @@ async def invites_setup(
 ):
     d = _gdata(interaction.guild_id)
     d["invites_channel"] = channel.id
-    asyncio.get_event_loop().create_task(_db_save_guild(interaction.guild_id))
+    await _db_save_guild(interaction.guild_id)
 
     # Pre-cache current invites
     await _refresh_invite_cache(interaction.guild)
