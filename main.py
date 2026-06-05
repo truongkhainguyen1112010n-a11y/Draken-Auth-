@@ -309,6 +309,18 @@ async def _v2_send_with_file(
                 log.error("V2 Send File Error %s: %s", r.status, data)
 
 
+async def _v2_send_with_channel_id(channel_id: int, components: list[dict]) -> None:
+    """Send a Components V2 message to a channel by ID (e.g. DM channel)."""
+    url     = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
+    payload = {"flags": V2_FLAG, "components": components}
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            data = await r.json()
+            if r.status not in (200, 201):
+                log.error("V2 Send Channel Error %s: %s", r.status, data)
+
+
 async def _get_or_create_dm(user: discord.User | discord.Member) -> int | None:
     """Return the DM channel ID for a user, creating it if needed."""
     url     = "https://discord.com/api/v10/users/@me/channels"
@@ -773,11 +785,17 @@ class ControlView(discord.ui.View):
         row=0,
     )
     async def close(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await interaction.response.send_message(
-            t("close_confirm_q"),
-            view=ConfirmCloseView(),
-            ephemeral=True,
-        )
+        try:
+            await interaction.response.send_message(
+                t("close_confirm_q"),
+                view=ConfirmCloseView(),
+                ephemeral=True,
+            )
+        except discord.NotFound:
+            pass
+        except discord.HTTPException as e:
+            if e.code == 40060:  # already acknowledged
+                await interaction.followup.send(t("close_confirm_q"), view=ConfirmCloseView(), ephemeral=True)
 
     @discord.ui.button(
         label="Claim Ticket",
@@ -786,7 +804,12 @@ class ControlView(discord.ui.View):
         row=0,
     )
     async def claim(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await _claim_ticket(interaction)
+        try:
+            await _claim_ticket(interaction)
+        except discord.NotFound:
+            pass
+        except discord.HTTPException as e:
+            log.warning("Claim Button Error: %s", e)
 
 
 class ConfirmCloseView(discord.ui.View):
@@ -1340,7 +1363,7 @@ async def _do_close_ticket(interaction: discord.Interaction):
     try:
         buf, fname = await _build_transcript(channel, td, str(interaction.user))
 
-        # ── DM the ticket author — Components V2 + file in same message ────
+        # ── DM the ticket author — V2 container + file attachment ───────────
         ticket_num = td.get('id', '????')
         category   = td.get('category', 'N/A')
         subject    = td.get('subject', 'N/A')
@@ -1348,9 +1371,8 @@ async def _do_close_ticket(interaction: discord.Interaction):
             try:
                 dm_channel_id = await _get_or_create_dm(author)
                 if dm_channel_id:
-                    buf.seek(0)
-                    file_bytes = buf.read()
-                    await _v2_send_with_file(
+                    # 1. Send V2 container
+                    await _v2_send_with_channel_id(
                         dm_channel_id,
                         [
                             _container(
@@ -1362,11 +1384,18 @@ async def _do_close_ticket(interaction: discord.Interaction):
                                 ),
                             )
                         ],
-                        file_bytes,
-                        fname,
                     )
-            except discord.Forbidden:
-                log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
+                    # 2. Send the .txt file as a normal message
+                    buf.seek(0)
+                    url     = f"https://discord.com/api/v10/channels/{dm_channel_id}/messages"
+                    headers = {"Authorization": f"Bot {TOKEN}"}
+                    form    = aiohttp.FormData()
+                    form.add_field("payload_json", json.dumps({}), content_type="application/json")
+                    form.add_field("files[0]", buf.read(), filename=fname, content_type="text/plain")
+                    async with aiohttp.ClientSession() as s:
+                        async with s.post(url, data=form, headers=headers) as r:
+                            if r.status not in (200, 201):
+                                log.warning("DM File Send Error: %s", await r.json())
             except Exception as e:
                 log.warning("DM V2 Error: %s", e)
 
@@ -1439,12 +1468,15 @@ async def _claim_ticket(interaction: discord.Interaction):
             ephemeral=True,
         )
 
+    # Acknowledge interaction FIRST
+    await interaction.response.defer(ephemeral=True)
+
     td["claimed_by"] = interaction.user.id
     ts = int(datetime.now(timezone.utc).timestamp())
 
     await _v2_send(interaction.channel, [  # type: ignore
         _container(
-            _text("## Ticket Claimed"),
+            _text("## 🎫 Ticket Claimed"),
             _separator(),
             _text(
                 f"**{interaction.user.mention}** {t('claim_success_ch')}  —  <t:{ts}:R>\n"
@@ -1452,7 +1484,7 @@ async def _claim_ticket(interaction: discord.Interaction):
             ),
         )
     ])
-    await interaction.response.send_message(t("claim_ack"), ephemeral=True)
+    await interaction.followup.send(t("claim_ack"), ephemeral=True)
 
 
 async def _build_transcript(
