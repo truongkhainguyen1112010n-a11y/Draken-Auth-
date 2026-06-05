@@ -1101,7 +1101,7 @@ async def on_member_join(member: discord.Member):
 
         await _v2_send(wch, [  # type: ignore
             _container(
-                _text(f"## Welcome To {guild.name}!"),
+                _text(f"## Welcome To {guild.name} <:kawaiifu:1512397384540356703>"),
                 _separator(),
                 _section(
                     f"**Welcome {member.mention}!**\n"
@@ -1157,7 +1157,7 @@ async def on_member_join(member: discord.Member):
 
     await _v2_send(inv_ch, [  # type: ignore
         _container(
-            _text("## 📨 New Member Invited"),
+            _text("## 🔗 New Member Invited"),
             _separator(),
             _section(
                 f"**{member.mention}** Was Invited By {inviter_text}\n"
@@ -1308,15 +1308,24 @@ async def _do_close_ticket(interaction: discord.Interaction):
     try:
         buf, fname = await _build_transcript(channel, td, str(interaction.user))
 
-        # DM the ticket author
-        dm_body = (
-            f"**Ticket #{td.get('id', '????')} — {td.get('category', '')}**\n"
-            f"Your Ticket In **{guild.name}** Has Been Closed.\n"
-            f"A Transcript Of The Conversation Is Attached Below."
-        )
+        # ── DM the ticket author — styled like the reference image ───────────
+        ticket_num = td.get('id', '????')
+        category   = td.get('category', 'N/A')
+        subject    = td.get('subject', 'N/A')
         if author:
             try:
-                await author.send(content=dm_body, file=discord.File(buf, filename=fname))
+                embed = discord.Embed(
+                    title=f"🎫 Ticket #{ticket_num} — {category}",
+                    description=(
+                        f"Your Ticket In **{guild.name}** Has Been Closed.\n"
+                        f"Closed By **{interaction.user}**\n\n"
+                        f"A Transcript Of The Conversation Is Attached Below."
+                    ),
+                    color=0x2b2d31,
+                )
+                embed.add_field(name="Subject", value=subject, inline=False)
+                embed.set_footer(text=f"{guild.name}", icon_url=guild.icon.url if guild.icon else None)
+                await author.send(embed=embed, file=discord.File(buf, filename=fname))
             except discord.Forbidden:
                 log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
 
@@ -1326,13 +1335,9 @@ async def _do_close_ticket(interaction: discord.Interaction):
             lch = guild.get_channel(log_ch_id)
             if lch:
                 buf.seek(0)
-                ticket_num = td.get('id', '????')
-                category   = td.get('category', 'N/A')
-                subject    = td.get('subject', 'N/A')
                 author_mention = author.mention if author else f"<@{td['author_id']}>"
                 claimed_by_id  = td.get("claimed_by")
                 claimed_txt    = f"<@{claimed_by_id}>" if claimed_by_id else "`Unclaimed`"
-                opened_at      = td.get("created_at", "")
 
                 await _v2_send(lch, [  # type: ignore
                     _container(
@@ -2234,7 +2239,7 @@ async def on_member_remove(member: discord.Member):
 
     await _v2_send(lch, [  # type: ignore
         _container(
-            _text(f"## 👋 Goodbye From {guild.name}!"),
+            _text(f"## 🚪 Goodbye From **{guild.name}**!"),
             _separator(),
             _section(
                 f"**{member.mention} Has Left The Server.**\n"
@@ -2318,7 +2323,7 @@ async def invites_setup(
 
     await _v2_respond(interaction, [
         _container(
-            _text("## 📨 Invite Tracking Configured"),
+            _text("## 🔗 Invite Tracking Configured"),
             _separator(),
             _text(
                 f"**Invites Channel:** {channel.mention}\n\n"
@@ -2342,7 +2347,7 @@ async def invites_check(
 
     await _v2_respond(interaction, [
         _container(
-            _text("## 📨 Invite Stats"),
+            _text("## 🔗 Invite Stats"),
             _separator(),
             _section(
                 f"**{target.mention}** Has Invited **{count}** Member(s)\n"
@@ -2363,7 +2368,7 @@ async def invites_top(interaction: discord.Interaction):
     if not board:
         return await _v2_respond(interaction, [
             _container(
-                _text("## 📨 Invite Leaderboard"),
+                _text("## 🔗 Invite Leaderboard"),
                 _separator(),
                 _text("No Invite Data Found Yet. Data Is Collected When Members Join."),
             )
@@ -2379,7 +2384,7 @@ async def invites_top(interaction: discord.Interaction):
 
     await _v2_respond(interaction, [
         _container(
-            _text("## 📨 Invite Leaderboard"),
+            _text("## 🔗 Invite Leaderboard"),
             _separator(),
             _text("\n".join(rows)),
             _separator(),
