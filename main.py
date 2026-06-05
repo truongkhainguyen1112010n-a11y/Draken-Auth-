@@ -289,6 +289,38 @@ async def _v2_edit_msg(channel_id: int, message_id: int, components: list[dict])
                 log.error("V2 Edit Error %s: %s", r.status, await r.json())
 
 
+async def _v2_send_with_file(
+    channel_id: int,
+    components: list[dict],
+    file_bytes: bytes,
+    filename: str,
+) -> None:
+    """Send a Components V2 message with a file attachment via multipart."""
+    url     = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers = {"Authorization": f"Bot {TOKEN}"}
+    payload = {"flags": V2_FLAG, "components": components}
+    form    = aiohttp.FormData()
+    form.add_field("payload_json", json.dumps(payload), content_type="application/json")
+    form.add_field("files[0]", file_bytes, filename=filename, content_type="text/plain")
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, data=form, headers=headers) as r:
+            data = await r.json()
+            if r.status not in (200, 201):
+                log.error("V2 Send File Error %s: %s", r.status, data)
+
+
+async def _get_or_create_dm(user: discord.User | discord.Member) -> int | None:
+    """Return the DM channel ID for a user, creating it if needed."""
+    url     = "https://discord.com/api/v10/users/@me/channels"
+    headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json={"recipient_id": user.id}, headers=headers) as r:
+            if r.status in (200, 201):
+                data = await r.json()
+                return int(data["id"])
+    return None
+
+
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                      PERSISTENT STORE  (SQLite via aiosqlite)               ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -1308,20 +1340,35 @@ async def _do_close_ticket(interaction: discord.Interaction):
     try:
         buf, fname = await _build_transcript(channel, td, str(interaction.user))
 
-        # ── DM the ticket author — Crown Hub style ─────────────────────────
+        # ── DM the ticket author — Components V2 + file in same message ────
         ticket_num = td.get('id', '????')
         category   = td.get('category', 'N/A')
         subject    = td.get('subject', 'N/A')
         if author:
             try:
-                embed = discord.Embed(
-                    title=f"🎫 Ticket #{ticket_num} Closed",
-                    description=f"Closed by {interaction.user} in **{guild.name}**.",
-                    color=0xffffff,
-                )
-                await author.send(embed=embed, file=discord.File(buf, filename=fname))
+                dm_channel_id = await _get_or_create_dm(author)
+                if dm_channel_id:
+                    buf.seek(0)
+                    file_bytes = buf.read()
+                    await _v2_send_with_file(
+                        dm_channel_id,
+                        [
+                            _container(
+                                _text(f"## 🎫 Ticket #{ticket_num} Closed"),
+                                _separator(),
+                                _text(
+                                    f"Closed by **{interaction.user}** in **{guild.name}**.\n"
+                                    f"-# Transcript attached below."
+                                ),
+                            )
+                        ],
+                        file_bytes,
+                        fname,
+                    )
             except discord.Forbidden:
                 log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
+            except Exception as e:
+                log.warning("DM V2 Error: %s", e)
 
         # ── Send transcript to log channel with a clean embed ────────────────
         log_ch_id = d.get("log_channel")
