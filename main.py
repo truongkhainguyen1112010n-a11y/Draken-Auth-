@@ -723,9 +723,20 @@ class CategorySelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            CreateModal(self.values[0], interaction.guild_id)
-        )
+        try:
+            await interaction.response.send_modal(
+                CreateModal(self.values[0], interaction.guild_id)
+            )
+        except discord.NotFound:
+            # Interaction expired (bot restarted) — inform user
+            try:
+                await interaction.response.send_message(
+                    "⚠️ Bot vừa được restart. Vui lòng thử lại.", ephemeral=True
+                )
+            except Exception:
+                pass
+        except discord.HTTPException as e:
+            log.warning("Panel select error: %s", e)
 
 
 class PanelView(discord.ui.View):
