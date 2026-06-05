@@ -1165,6 +1165,7 @@ async def on_member_join(member: discord.Member):
                 inviter_avatar,
             ),
             _separator(),
+            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ])
@@ -1307,23 +1308,17 @@ async def _do_close_ticket(interaction: discord.Interaction):
     try:
         buf, fname = await _build_transcript(channel, td, str(interaction.user))
 
-        # ── DM the ticket author — styled like the reference image ───────────
+        # ── DM the ticket author — Crown Hub style ─────────────────────────
         ticket_num = td.get('id', '????')
         category   = td.get('category', 'N/A')
         subject    = td.get('subject', 'N/A')
         if author:
             try:
                 embed = discord.Embed(
-                    title=f"🎫 Ticket #{ticket_num} — {category}",
-                    description=(
-                        f"Your Ticket In **{guild.name}** Has Been Closed.\n"
-                        f"Closed By **{interaction.user}**\n\n"
-                        f"A Transcript Of The Conversation Is Attached Below."
-                    ),
-                    color=0x2b2d31,
+                    title=f"🎫 Ticket #{ticket_num} Closed",
+                    description=f"Closed by {interaction.user} in **{guild.name}**.",
+                    color=0xffffff,
                 )
-                embed.add_field(name="Subject", value=subject, inline=False)
-                embed.set_footer(text=f"{guild.name}", icon_url=guild.icon.url if guild.icon else None)
                 await author.send(embed=embed, file=discord.File(buf, filename=fname))
             except discord.Forbidden:
                 log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
@@ -1464,6 +1459,7 @@ async def _log_event(
                 actor.display_avatar.with_size(256).url,
             ),
             _separator(),
+            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ])
@@ -1553,7 +1549,6 @@ async def ticket_panel(interaction: discord.Interaction):
                 placeholder="Choose Ticket Type...",
                 options=select_options,
             ),
-            _text("-# Limit **1** open ticket per member."),
         )
     ])
 
@@ -2247,6 +2242,7 @@ async def on_member_remove(member: discord.Member):
                 avatar_url,
             ),
             _separator(),
+            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ])
@@ -2354,6 +2350,7 @@ async def invites_check(
                 target.display_avatar.with_size(256).url,
             ),
             _separator(),
+            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ], ephemeral=False)
@@ -2386,6 +2383,7 @@ async def invites_top(interaction: discord.Interaction):
             _text("## 🔗 Invite Leaderboard"),
             _separator(),
             _text("\n".join(rows)),
+            _separator(),
             _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
