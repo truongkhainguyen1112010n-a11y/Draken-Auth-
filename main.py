@@ -850,13 +850,20 @@ intents.members         = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 
+async def _sync_commands():
+    try:
+        synced = await bot.tree.sync()
+        log.info("Slash Commands Synced — %d Commands", len(synced))
+    except Exception as e:
+        log.error("Sync Error: %s", e)
+
+
 @bot.event
 async def on_ready():
     await _db_init()
     await _db_load_all()
     bot.add_view(PanelView())
     bot.add_view(ControlView())
-    await bot.tree.sync()
     await bot.change_presence(status=discord.Status.online)
     if not payment_checker.is_running():
         payment_checker.start()
@@ -871,6 +878,8 @@ async def on_ready():
         "Logged In As %s  |  Guilds: %d  |  Owner ID: %d",
         bot.user, len(bot.guilds), OWNER_ID,
     )
+    # Sync slash commands in background so interactions aren't blocked
+    asyncio.create_task(_sync_commands())
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -1583,6 +1592,7 @@ async def ticket_setup(
     support_role: discord.Role,
     log_channel:  Optional[discord.TextChannel] = None,
 ):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     d["ticket_category"] = category.id
     d["support_role"]    = support_role.id
@@ -1590,7 +1600,7 @@ async def ticket_setup(
     await _db_save_guild(interaction.guild_id)
 
     lc = log_channel.mention if log_channel else t("setup_not_set")
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text(f"## {t('setup_ok')}"),
             _separator(),
@@ -1647,11 +1657,12 @@ async def ticket_panel(interaction: discord.Interaction):
 @app_commands.describe(user="Member To Add To This Ticket Channel")
 @is_owner()
 async def ticket_add(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     if interaction.channel_id not in d["tickets"]:
         return await interaction.response.send_message(t("err_not_ticket"), ephemeral=True)
     await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)  # type: ignore
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## User Added"),
             _separator(),
@@ -1664,11 +1675,12 @@ async def ticket_add(interaction: discord.Interaction, user: discord.Member):
 @app_commands.describe(user="Member To Remove From This Ticket Channel")
 @is_owner()
 async def ticket_remove(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     if interaction.channel_id not in d["tickets"]:
         return await interaction.response.send_message(t("err_not_ticket"), ephemeral=True)
     await interaction.channel.set_permissions(user, overwrite=None)  # type: ignore
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## User Removed"),
             _separator(),
@@ -1680,6 +1692,7 @@ async def ticket_remove(interaction: discord.Interaction, user: discord.Member):
 @ticket_grp.command(name="list", description="View All Currently Open Tickets")
 @is_owner()
 async def ticket_list(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
     d      = _gdata(interaction.guild_id)
     open_t = {cid: td for cid, td in d["tickets"].items() if td.get("open")}
 
@@ -1691,7 +1704,7 @@ async def ticket_list(interaction: discord.Interaction):
         claimed = f"<@{td['claimed_by']}>" if td.get("claimed_by") else t("list_unclaimed")
         rows.append(f"**#{td['id']}** <#{ch_id}>  —  {td['category']}  —  {claimed}")
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text(f"## {t('list_title')}  ({len(open_t)})"),
             _separator(),
@@ -1792,6 +1805,7 @@ async def welcome_setup(
     rules:       Optional[discord.TextChannel] = None,
     news:        Optional[discord.TextChannel] = None,
 ):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     d["welcome_channel"]  = channel.id
     d["welcome_purchase"] = purchase.id if purchase else None
@@ -1802,7 +1816,7 @@ async def welcome_setup(
     def _ref(ch: Optional[discord.TextChannel]) -> str:
         return ch.mention if ch else "`Not Set`"
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## Welcome System Configured"),
             _separator(),
@@ -1863,6 +1877,7 @@ async def payment_setup(
     confirm_role:  Optional[discord.Role] = None,
     timeout:       int = 10,
 ):
+    await interaction.response.defer(ephemeral=True)
     d             = _gdata(interaction.guild_id)
     bank_id_upper = bank_id.strip().upper()
 
@@ -1875,7 +1890,7 @@ async def payment_setup(
     d["pay_timeout"]      = max(1, timeout) * 60
     await _db_save_guild(interaction.guild_id)
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## ✅ Payment System Configured"),
             _separator(),
@@ -1979,6 +1994,7 @@ async def payment_create(
 @payment_grp.command(name="check", description="Manually Check A Payment Status By Reference Code")
 @app_commands.describe(ref="Payment Reference Code (E.g. PAYAB1234)")
 async def payment_check(interaction: discord.Interaction, ref: str):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     p = d["payments"].get(ref.upper())
     if not p:
@@ -1995,7 +2011,7 @@ async def payment_check(interaction: discord.Interaction, ref: str):
     payer = interaction.guild.get_member(p["user_id"])
     ts    = int(p["created_at"])
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text(f"## {status_icon} Payment Status"),
             _separator(),
@@ -2073,6 +2089,7 @@ async def payment_cancel(interaction: discord.Interaction, ref: str):
 ])
 @is_owner()
 async def payment_list(interaction: discord.Interaction, status: str = "all"):
+    await interaction.response.defer(ephemeral=True)
     d        = _gdata(interaction.guild_id)
     payments = d["payments"]
 
@@ -2098,7 +2115,7 @@ async def payment_list(interaction: discord.Interaction, status: str = "all"):
     confirmed = sum(1 for p in filtered.values() if p["status"] == "confirmed")
     total_vnd = sum(p["amount"] for p in filtered.values() if p["status"] == "confirmed")
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text(f"## 💳 Payment List — `{status.upper()}`"),
             _separator(),
@@ -2142,6 +2159,7 @@ async def payment_announce_all(
 @payment_grp.command(name="info", description="Show Current Payment System Configuration")
 @is_owner()
 async def payment_info(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     if not d.get("pay_bank_id"):
         return await interaction.response.send_message(
@@ -2155,7 +2173,7 @@ async def payment_info(interaction: discord.Interaction):
     confirmed = sum(1 for p in d["payments"].values() if p["status"] == "confirmed")
     revenue   = sum(p["amount"] for p in d["payments"].values() if p["status"] == "confirmed")
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## 🏦 Payment System Info"),
             _separator(),
@@ -2287,16 +2305,16 @@ async def cmd_sync(ctx: commands.Context):
 
 @bot.tree.command(name="ping", description="Check Bot Latency")
 async def slash_ping(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
     latency_ms = round(bot.latency * 1000)
     ts = int(datetime.now(timezone.utc).timestamp())
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## 🏓 Pong!"),
             _separator(),
-            _text(
-                f"**Latency:** `{latency_ms}ms`\n"
-                f"-# <t:{ts}:F>"
-            ),
+            _text(f"**Latency:** `{latency_ms}ms`"),
+            _separator(),
+            _text(f"-# <t:{ts}:F>"),
         )
     ], ephemeral=False)
 
@@ -2353,11 +2371,12 @@ async def leave_setup(
     interaction: discord.Interaction,
     channel:     discord.TextChannel,
 ):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     d["leave_channel"] = channel.id
     await _db_save_guild(interaction.guild_id)
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## Leave System Configured"),
             _separator(),
@@ -2395,6 +2414,7 @@ async def invites_setup(
     interaction: discord.Interaction,
     channel:     discord.TextChannel,
 ):
+    await interaction.response.defer(ephemeral=True)
     d = _gdata(interaction.guild_id)
     d["invites_channel"] = channel.id
     await _db_save_guild(interaction.guild_id)
@@ -2402,7 +2422,7 @@ async def invites_setup(
     # Pre-cache current invites
     await _refresh_invite_cache(interaction.guild)
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## 🔗 Invite Tracking Configured"),
             _separator(),
@@ -2422,11 +2442,12 @@ async def invites_check(
     interaction: discord.Interaction,
     user:        Optional[discord.Member] = None,
 ):
+    await interaction.response.defer(ephemeral=False)
     target = user or interaction.user
     count  = await _invite_get(interaction.guild_id, target.id)
     ts     = int(datetime.now(timezone.utc).timestamp())
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## 🔗 Invite Stats"),
             _separator(),
@@ -2443,11 +2464,12 @@ async def invites_check(
 
 @invites_grp.command(name="top", description="Show The Invite Leaderboard")
 async def invites_top(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
     board = await _invite_leaderboard(interaction.guild_id, limit=10)
     ts    = int(datetime.now(timezone.utc).timestamp())
 
     if not board:
-        return await _v2_respond(interaction, [
+        return await _v2_followup(interaction, [
             _container(
                 _text("## 🔗 Invite Leaderboard"),
                 _separator(),
@@ -2463,7 +2485,7 @@ async def invites_top(interaction: discord.Interaction):
         mention= m.mention       if m else f"<@{uid}>"
         rows.append(f"{medals[i]} **#{i+1}** {mention} — **{cnt}** Invite(s)")
 
-    await _v2_respond(interaction, [
+    await _v2_followup(interaction, [
         _container(
             _text("## 🔗 Invite Leaderboard"),
             _separator(),
