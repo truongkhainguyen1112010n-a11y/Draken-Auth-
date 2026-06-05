@@ -1220,7 +1220,6 @@ async def on_member_join(member: discord.Member):
                 inviter_avatar,
             ),
             _separator(),
-            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ])
@@ -1363,7 +1362,7 @@ async def _do_close_ticket(interaction: discord.Interaction):
     try:
         buf, fname = await _build_transcript(channel, td, str(interaction.user))
 
-        # ── DM the ticket author — V2 container + file attachment ───────────
+        # ── DM the ticket author — Components V2 + file (Crown Hub style) ──
         ticket_num = td.get('id', '????')
         category   = td.get('category', 'N/A')
         subject    = td.get('subject', 'N/A')
@@ -1371,33 +1370,25 @@ async def _do_close_ticket(interaction: discord.Interaction):
             try:
                 dm_channel_id = await _get_or_create_dm(author)
                 if dm_channel_id:
-                    # 1. Send V2 container
-                    await _v2_send_with_channel_id(
+                    buf.seek(0)
+                    await _v2_send_with_file(
                         dm_channel_id,
                         [
                             _container(
                                 _text(f"## 🎫 Ticket #{ticket_num} Closed"),
                                 _separator(),
                                 _text(
-                                    f"Closed by **{interaction.user}** in **{guild.name}**.\n"
-                                    f"-# Transcript attached below."
+                                    f"Closed by **{interaction.user}** in **{guild.name}**."
                                 ),
                             )
                         ],
+                        buf.read(),
+                        fname,
                     )
-                    # 2. Send the .txt file as a normal message
-                    buf.seek(0)
-                    url     = f"https://discord.com/api/v10/channels/{dm_channel_id}/messages"
-                    headers = {"Authorization": f"Bot {TOKEN}"}
-                    form    = aiohttp.FormData()
-                    form.add_field("payload_json", json.dumps({}), content_type="application/json")
-                    form.add_field("files[0]", buf.read(), filename=fname, content_type="text/plain")
-                    async with aiohttp.ClientSession() as s:
-                        async with s.post(url, data=form, headers=headers) as r:
-                            if r.status not in (200, 201):
-                                log.warning("DM File Send Error: %s", await r.json())
+            except discord.Forbidden:
+                log.warning("Could Not DM Transcript To %s (DMs Disabled)", author)
             except Exception as e:
-                log.warning("DM V2 Error: %s", e)
+                log.warning("DM Error: %s", e)
 
         # ── Send transcript to log channel with a clean embed ────────────────
         log_ch_id = d.get("log_channel")
@@ -1442,11 +1433,12 @@ async def _do_close_ticket(interaction: discord.Interaction):
     await _db_log_ticket_close(guild.id, td, interaction.user.id)
 
     await asyncio.sleep(10)
-    subject = td.get("subject", "")
+    subject      = td.get("subject", "")
+    channel_name = channel.name  # save name before deleting
     await channel.delete(reason=f"Ticket Closed By {interaction.user}")
     d["tickets"].pop(interaction.channel_id, None)
     await _db_save_guild(guild.id)
-    await _log_event(guild, "CLOSE", interaction.channel_id, interaction.user, subject)
+    await _log_event(guild, "CLOSE", interaction.channel_id, interaction.user, subject, channel_name=channel_name)
 
 
 async def _claim_ticket(interaction: discord.Interaction):
@@ -1517,6 +1509,7 @@ async def _log_event(
     channel_id: int,
     actor: discord.Member,
     subject: str,
+    channel_name: str = "",
 ):
     d   = _gdata(guild.id)
     lch = guild.get_channel(d["log_channel"]) if d.get("log_channel") else None
@@ -1524,20 +1517,24 @@ async def _log_event(
         return
 
     ts    = int(datetime.now(timezone.utc).timestamp())
+    icons = {"CREATE": "🎫", "CLOSE": "🔒", "CLAIM": "🙋"}
     tags  = {"CREATE": "Ticket Created", "CLOSE": "Ticket Closed", "CLAIM": "Ticket Claimed"}
+    icon  = icons.get(event, "📋")
     label = tags.get(event, event.title())
+
+    # Use saved channel name if channel was already deleted
+    ch_display = f"`#{channel_name}`" if channel_name else f"<#{channel_id}>"
 
     await _v2_send(lch, [  # type: ignore
         _container(
-            _text(f"## {label}"),
+            _text(f"## {icon} {label}"),
             _separator(),
             _section(
-                f"**Channel:** <#{channel_id}>\n"
-                f"**Actor:** {actor.mention}  (`{actor}` — ID: `{actor.id}`)\n"
+                f"**Channel:** {ch_display}\n"
+                f"**Actor:** {actor.mention}  (`{actor}`)\n"
                 f"**Subject:** {subject[:100]}",
                 actor.display_avatar.with_size(256).url,
             ),
-            _separator(),
             _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
@@ -2321,7 +2318,6 @@ async def on_member_remove(member: discord.Member):
                 avatar_url,
             ),
             _separator(),
-            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ])
@@ -2429,7 +2425,6 @@ async def invites_check(
                 target.display_avatar.with_size(256).url,
             ),
             _separator(),
-            _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
     ], ephemeral=False)
@@ -2462,7 +2457,6 @@ async def invites_top(interaction: discord.Interaction):
             _text("## 🔗 Invite Leaderboard"),
             _separator(),
             _text("\n".join(rows)),
-            _separator(),
             _separator(),
             _text(f"-# <t:{ts}:F>"),
         )
