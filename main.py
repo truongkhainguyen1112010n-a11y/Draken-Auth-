@@ -275,7 +275,7 @@ _CONFIG_KEYS = {
     "counter", "welcome_channel", "welcome_purchase", "welcome_rules",
     "welcome_news", "pay_bank_id", "pay_account_no", "pay_account_name",
     "pay_casso_key", "pay_log_channel", "pay_confirm_role", "pay_timeout",
-    "pay_announce_channel", "leave_channel",
+    "pay_announce_channel", "leave_channel", "invites_channel",
 }
 
 _STORE: dict[int, dict] = {}
@@ -292,6 +292,7 @@ _DEFAULTS: dict = {
     "welcome_rules":    None,
     "welcome_news":     None,
     "leave_channel":    None,
+    "invites_channel":  None,
     "pay_bank_id":      "ICB",
     "pay_account_no":   "0907617630",
     "pay_account_name": "Nguyen Van A",
@@ -611,6 +612,9 @@ async def on_ready():
         payment_expiry.start()
     if not daily_summary_task.is_running():
         daily_summary_task.start()
+    # Pre-cache invites for all guilds
+    for guild in bot.guilds:
+        await _refresh_invite_cache(guild)
     log.info(
         "Logged In As %s  |  Guilds: %d  |  Owner ID: %d",
         bot.user, len(bot.guilds), OWNER_ID,
@@ -866,6 +870,31 @@ async def _notify_payment_expired(guild_id: int, ref: str):
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    INVITE CACHE  (snapshot before each join)                ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+# guild_id -> {code: uses}
+_invite_cache: dict[int, dict[str, int]] = {}
+
+async def _refresh_invite_cache(guild: discord.Guild) -> None:
+    try:
+        invites = await guild.invites()
+        _invite_cache[guild.id] = {inv.code: (inv.uses or 0) for inv in invites}
+    except Exception:
+        pass
+
+@bot.event
+async def on_invite_create(invite: discord.Invite):
+    if invite.guild:
+        await _refresh_invite_cache(invite.guild)  # type: ignore
+
+@bot.event
+async def on_invite_delete(invite: discord.Invite):
+    if invite.guild:
+        await _refresh_invite_cache(invite.guild)  # type: ignore
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                          EVENT — MEMBER JOIN                                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
@@ -874,32 +903,82 @@ async def on_member_join(member: discord.Member):
     guild = member.guild
     d     = _gdata(guild.id)
 
-    wch = guild.get_channel(d.get("welcome_channel") or 0)
-    if not wch:
-        return
-
-    def _ref(ch_id) -> str:
-        return f"<#{ch_id}>" if ch_id else "`Not Set`"
-
     ts         = int(datetime.now(timezone.utc).timestamp())
     avatar_url = member.display_avatar.with_size(256).url
 
-    await _v2_send(wch, [  # type: ignore
+    # ── Welcome message ───────────────────────────────────────────────────────
+    wch = guild.get_channel(d.get("welcome_channel") or 0)
+    if wch:
+        def _ref(ch_id) -> str:
+            return f"<#{ch_id}>" if ch_id else "`Not Set`"
+
+        await _v2_send(wch, [  # type: ignore
+            _container(
+                _text(f"## Welcome To {guild.name}!"),
+                _separator(),
+                _section(
+                    f"**Welcome {member.mention}!**\n"
+                    f"> Purchase At {_ref(d.get('welcome_purchase'))}\n"
+                    f"> Rules In {_ref(d.get('welcome_rules'))}\n"
+                    f"> News In {_ref(d.get('welcome_news'))}",
+                    avatar_url,
+                ),
+                _separator(),
+                _text(f"-# Member #{guild.member_count}  ·  <t:{ts}:F>"),
+            )
+        ])
+        log.info("Welcome Sent For %s In '%s' (Member #%d)", member, guild.name, guild.member_count)
+
+    # ── Invite tracking ───────────────────────────────────────────────────────
+    inv_ch = guild.get_channel(d.get("invites_channel") or 0)
+    if not inv_ch:
+        await _refresh_invite_cache(guild)
+        return
+
+    # Compare cached uses vs current uses to find which invite was used
+    old_cache = _invite_cache.get(guild.id, {})
+    inviter: discord.Member | None = None
+    used_code: str = "Unknown"
+    used_uses: int = 0
+
+    try:
+        new_invites = await guild.invites()
+        for inv in new_invites:
+            old_uses = old_cache.get(inv.code, 0)
+            if (inv.uses or 0) > old_uses:
+                inviter    = guild.get_member(inv.inviter.id) if inv.inviter else None
+                used_code  = inv.code
+                used_uses  = inv.uses or 0
+                break
+        # Refresh cache after detection
+        _invite_cache[guild.id] = {inv.code: (inv.uses or 0) for inv in new_invites}
+    except Exception as e:
+        log.warning("Invite Track Error: %s", e)
+        await _refresh_invite_cache(guild)
+        return
+
+    inviter_text = inviter.mention if inviter else "`Unknown`"
+    inviter_name = str(inviter) if inviter else "Unknown"
+    inviter_avatar = (
+        inviter.display_avatar.with_size(256).url if inviter
+        else "https://cdn.discordapp.com/embed/avatars/0.png"
+    )
+
+    await _v2_send(inv_ch, [  # type: ignore
         _container(
-            _text(f"## Welcome To {guild.name}!"),
+            _text("## 📨 New Member Invited"),
             _separator(),
             _section(
-                f"**Welcome {member.mention}!**\n"
-                f"> Purchase At {_ref(d.get('welcome_purchase'))}\n"
-                f"> Rules In {_ref(d.get('welcome_rules'))}\n"
-                f"> News In {_ref(d.get('welcome_news'))}",
+                f"**{member.mention}** Was Invited By {inviter_text}\n"
+                f"> Invite Code: `{used_code}`\n"
+                f"> Total Uses: `{used_uses}`",
                 avatar_url,
             ),
             _separator(),
-            _text(f"-# Member #{guild.member_count}  ·  <t:{ts}:F>"),
+            _text(f"-# <t:{ts}:F>"),
         )
     ])
-    log.info("Welcome Sent For %s In '%s' (Member #%d)", member, guild.name, guild.member_count)
+    log.info("Invite Track: %s Joined Via %s (Invited By %s)", member, used_code, inviter_name)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -1917,23 +1996,21 @@ async def on_member_remove(member: discord.Member):
     guild = member.guild
     d     = _gdata(guild.id)
 
-    leave_ch_id = d.get("leave_channel")
-    if not leave_ch_id:
-        return
-
-    lch = guild.get_channel(leave_ch_id)
+    lch = guild.get_channel(d.get("leave_channel") or 0)
     if not lch:
         return
 
     ts         = int(datetime.now(timezone.utc).timestamp())
     avatar_url = member.display_avatar.with_size(256).url
+    joined_ts  = int(member.joined_at.timestamp()) if member.joined_at else ts
 
     await _v2_send(lch, [  # type: ignore
         _container(
-            _text(f"## Goodbye From {guild.name}!"),
+            _text(f"## 👋 Goodbye From {guild.name}!"),
             _separator(),
             _section(
                 f"**{member.mention} Has Left The Server.**\n"
+                f"> Joined: <t:{joined_ts}:R>\n"
                 f"> We Now Have `{guild.member_count}` Members.",
                 avatar_url,
             ),
@@ -1983,73 +2060,44 @@ bot.tree.add_command(leave_grp)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                          /invites COMMAND                                   ║
+# ║                       /invites setup COMMAND                                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-@bot.tree.command(name="invites", description="Show Who Invited A Member To This Server")
-@app_commands.describe(
-    member="Member To Look Up",
-    channel="Channel To Send The Result (Defaults To Current Channel)",
+invites_grp = app_commands.Group(
+    name="invites",
+    description="Invite Tracking System",
+    default_permissions=discord.Permissions(0),
 )
+
+
+@invites_grp.command(name="setup", description="Configure The Invite Tracking Channel")
+@app_commands.describe(channel="Channel To Send Invite Notifications In")
 @is_owner()
-async def slash_invites(
+async def invites_setup(
     interaction: discord.Interaction,
-    member:      discord.Member,
-    channel:     Optional[discord.TextChannel] = None,
+    channel:     discord.TextChannel,
 ):
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    d = _gdata(interaction.guild_id)
+    d["invites_channel"] = channel.id
+    _save_data()
 
-    guild   = interaction.guild
-    target  = channel or interaction.channel  # type: ignore
-    ts      = int(datetime.now(timezone.utc).timestamp())
+    # Pre-cache current invites
+    await _refresh_invite_cache(interaction.guild)
 
-    try:
-        invites = await guild.invites()
-    except discord.Forbidden:
-        return await interaction.followup.send(
-            "❌ Missing Permission To View Invites. Please Grant The Bot `Manage Guild` Permission.",
-            ephemeral=True,
-        )
-
-    # Find which invite(s) this member could have used (match by usage tracking)
-    # Since Discord doesn't directly expose who used which invite, we show all
-    # active inviters ranked by usage count as a best-effort lookup.
-    inviter_map: dict[int, tuple[discord.Member | None, int, int]] = {}
-    for inv in invites:
-        if inv.inviter is None:
-            continue
-        uid = inv.inviter.id
-        uses = inv.uses or 0
-        if uid not in inviter_map:
-            inviter_map[uid] = (guild.get_member(uid), uses, 1)
-        else:
-            prev_m, prev_u, prev_c = inviter_map[uid]
-            inviter_map[uid] = (prev_m, prev_u + uses, prev_c + 1)
-
-    # Check if member's join date can be correlated — show top inviters instead
-    rows = []
-    for uid, (inv_member, uses, links) in sorted(inviter_map.items(), key=lambda x: -x[1][1])[:10]:
-        name = inv_member.mention if inv_member else f"<@{uid}>"
-        rows.append(f"> {name} — `{uses}` Joins  ·  `{links}` Link(s)")
-
-    body = "\n".join(rows) if rows else "> No Active Invite Links Found."
-
-    await _v2_send(target, [
+    await _v2_respond(interaction, [
         _container(
-            _section(
-                f"## 📨 Invite Lookup — {member.mention}\n\n"
-                f"**Checking Who Invited:** {member.mention}\n"
-                f"**Server Invite Leaderboard:**\n{body}\n\n"
-                f"-# <t:{ts}:F>",
-                member.display_avatar.with_size(256).url,
+            _text("## 📨 Invite Tracking Configured"),
+            _separator(),
+            _text(
+                f"**Invites Channel:** {channel.mention}\n\n"
+                "When A Member Joins, The Bot Will Automatically Detect Who Invited Them."
             ),
         )
     ])
+    log.info("Invites Setup By %s In '%s'", interaction.user, interaction.guild.name)
 
-    await interaction.followup.send(
-        f"Invite Info Sent To {target.mention}.", ephemeral=True
-    )
-    log.info("Invites Lookup For %s By %s — Sent To #%s", member, interaction.user, target)
+
+bot.tree.add_command(invites_grp)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
